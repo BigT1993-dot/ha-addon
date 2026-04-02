@@ -201,6 +201,8 @@ class EvccAutoMode:
         self.automation_enabled = True
         self.export_timer_started_at: float | None = None
         self.import_timer_started_at: float | None = None
+        self.export_cycle_count = 0
+        self.import_cycle_count = 0
         self.last_mqtt_message_at: float | None = None
         self.last_mode_command: str | None = None
         self.last_mode_command_at: float | None = None
@@ -283,6 +285,7 @@ class EvccAutoMode:
                     self.offered_current = parse_float(payload)
                 elif msg.topic == topics["grid_power"]:
                     self.grid_power = parse_float(payload)
+                    self.update_grid_power_cycles()
                 elif msg.topic == topics["buffer_soc"]:
                     self.buffer_soc = parse_optional_float(payload)
                 elif msg.topic == topics["battery_soc"]:
@@ -295,18 +298,6 @@ class EvccAutoMode:
 
     def evaluate(self) -> None:
         with self.state_lock:
-            now = time.monotonic()
-
-            if self.grid_power <= self.config.export_power_threshold_w:
-                self.export_timer_started_at = self.export_timer_started_at or now
-            else:
-                self.export_timer_started_at = None
-
-            if self.grid_power >= self.config.import_power_threshold_w:
-                self.import_timer_started_at = self.import_timer_started_at or now
-            else:
-                self.import_timer_started_at = None
-
             if not self.connected and self.auto_mode_active:
                 LOGGER.info("Vehicle disconnected; clearing auto mode state")
                 self.set_auto_mode_active(False, reason="vehicle disconnected", source="automation")
@@ -316,19 +307,36 @@ class EvccAutoMode:
                 self.last_restore_reason = "automation stopped by user"
                 return
 
-            should_set_minpv, set_reason = self.should_set_minpv(now)
+            should_set_minpv, set_reason = self.should_set_minpv()
             self.last_decision_reason = set_reason
             if should_set_minpv:
                 self.publish_mode("minpv", reason=set_reason)
                 self.set_auto_mode_active(True, reason=f"set minpv: {set_reason}", source="automation")
 
-            should_restore_pv, restore_reason = self.should_restore_pv(now)
+            should_restore_pv, restore_reason = self.should_restore_pv()
             self.last_restore_reason = restore_reason
             if should_restore_pv:
                 self.publish_mode("pv", reason=restore_reason)
                 self.set_auto_mode_active(False, reason=f"restored pv: {restore_reason}", source="automation")
 
-    def should_set_minpv(self, now: float) -> tuple[bool, str]:
+    def update_grid_power_cycles(self) -> None:
+        now = time.monotonic()
+
+        if self.grid_power <= self.config.export_power_threshold_w:
+            self.export_cycle_count += 1
+            self.export_timer_started_at = self.export_timer_started_at or now
+        else:
+            self.export_cycle_count = 0
+            self.export_timer_started_at = None
+
+        if self.grid_power >= self.config.import_power_threshold_w:
+            self.import_cycle_count += 1
+            self.import_timer_started_at = self.import_timer_started_at or now
+        else:
+            self.import_cycle_count = 0
+            self.import_timer_started_at = None
+
+    def should_set_minpv(self) -> tuple[bool, str]:
         blockers: list[str] = []
 
         if not self.automation_enabled:
@@ -343,12 +351,12 @@ class EvccAutoMode:
             blockers.append("evcc already in minpv")
         if self.offered_current > self.config.evcc_active_current_threshold:
             blockers.append("evcc is actively regulating current")
-        if self.export_timer_started_at is None:
+        if self.export_cycle_count == 0:
             blockers.append(
                 f"no sustained export detected at or below {format_threshold(self.config.export_power_threshold_w)} W"
             )
-        elif now - self.export_timer_started_at < self.config.export_delay_seconds:
-            blockers.append("export delay not reached yet")
+        elif self.export_cycle_count < 2:
+            blockers.append(f"waiting for second export MQTT cycle ({self.export_cycle_count}/2)")
         if self.battery_soc is None or self.buffer_soc is None:
             blockers.append("battery or buffer SoC missing")
         elif self.battery_soc >= self.buffer_soc:
@@ -357,13 +365,13 @@ class EvccAutoMode:
             return False, "; ".join(blockers)
         return True, "all activation conditions met"
 
-    def should_restore_pv(self, now: float) -> tuple[bool, str]:
+    def should_restore_pv(self) -> tuple[bool, str]:
         if not self.auto_mode_active:
             return False, "auto mode not active"
-        if self.import_timer_started_at is None:
+        if self.import_cycle_count == 0:
             return False, f"no sustained grid import detected at or above {format_threshold(self.config.import_power_threshold_w)} W"
-        if now - self.import_timer_started_at < self.config.import_delay_seconds:
-            return False, "import delay not reached yet"
+        if self.import_cycle_count < 2:
+            return False, f"waiting for second import MQTT cycle ({self.import_cycle_count}/2)"
         if self.current_mode == "pv":
             return False, "evcc already in pv"
         return True, "all restore conditions met"
@@ -551,6 +559,8 @@ class EvccAutoMode:
                     "grid_power": self.grid_power,
                     "buffer_soc": self.buffer_soc,
                     "battery_soc": self.battery_soc,
+                    "export_cycle_count": self.export_cycle_count,
+                    "import_cycle_count": self.import_cycle_count,
                     "automation_enabled": self.automation_enabled,
                     "auto_mode_active": self.auto_mode_active,
                     "last_decision_reason": self.last_decision_reason,
@@ -589,6 +599,8 @@ class EvccAutoMode:
             self.last_mqtt_message_at = None
             self.export_timer_started_at = None
             self.import_timer_started_at = None
+            self.export_cycle_count = 0
+            self.import_cycle_count = 0
             self.current_mode = ""
             self.grid_power = 0.0
             self.offered_current = 0.0
