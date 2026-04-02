@@ -19,6 +19,7 @@ Direkt in der Ingress-Oberflaeche koennen ausserdem die Laufzeitwerte angepasst 
 - MQTT Host, Port, Benutzername und Passwort
 - Topic-Prefix
 - Loadpoint-ID
+- optionaler Home-Assistant-Leistungssensor fuer `grid_power`
 - Export- und Import-Leistungsschwellen in Watt
 - Export- und Import-Delays
 - Schwelle fuer `offeredCurrent`
@@ -28,7 +29,7 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
-Neu in `0.2.12`:
+Neu in `0.2.13`:
 
 - grosse `STOP Automation`-Schaltflaeche in der Ingress-Oberflaeche
 - persistente Historie fuer Moduswechsel, Konfigurationsaenderungen und Start/Stop der Automatik
@@ -42,6 +43,8 @@ Neu in `0.2.12`:
 - Aktivierung und Rueckstellung erst nach zwei aufeinanderfolgenden `grid_power`-MQTT-Zyklen ueber bzw. unter Schwellwert
 - History zeigt standardmaessig nur die letzten 10 Eintraege, aeltere Eintraege erst nach Aufklappen
 - eigener MQTT-Discovery-Sensor fuer den Automatik-Zustand mit State `started` oder `stopped`
+- optionaler Home-Assistant-Leistungssensor als Quelle fuer `grid_power`, in der UI auf Sensoren mit Einheit `W` gefiltert
+- bei Nutzung des Home-Assistant-Leistungssensors wieder zeitbasierte Schaltlogik mit Export-/Import-Delay
 
 ## Home Assistant Sensor
 
@@ -75,11 +78,11 @@ Wenn `STOP Automation` gedrueckt wird, schreibt das Add-on keine weiteren automa
 
 - Schaltet auf `minpv`, wenn:
   - das Fahrzeug verbunden ist
-  - zwei aufeinanderfolgende `grid_power`-MQTT-Werte bei oder unter der Export-Schwelle liegen
+  - `grid_power` fuer die konfigurierte Export-Dauer bei oder unter der Export-Schwelle liegt
   - `batterySoc < bufferSoc`
   - kein aktiver Ladeplan vorliegt
   - `evcc` nicht bereits selbst ueber den konfigurierten Mindeststrom hinaus regelt
-- Schaltet nur dann wieder auf `pv`, wenn das Add-on `minpv` selbst gesetzt hat und anschliessend zwei aufeinanderfolgende `grid_power`-MQTT-Werte bei oder ueber der Import-Schwelle liegen
+- Schaltet nur dann wieder auf `pv`, wenn das Add-on `minpv` selbst gesetzt hat und anschliessend `grid_power` fuer die konfigurierte Import-Dauer bei oder ueber der Import-Schwelle liegt
 
 ## MQTT-Topics
 
@@ -105,6 +108,7 @@ mqtt_username: ""
 mqtt_password: ""
 mqtt_topic_prefix: evcc
 loadpoint_id: 1
+homeassistant_power_sensor_entity_id: ""
 export_power_threshold_w: -100
 import_power_threshold_w: 100
 export_delay_seconds: 60
@@ -112,3 +116,5 @@ import_delay_seconds: 30
 evcc_active_current_threshold: 6.0
 auto_reset_on_restart: true
 ```
+
+Wenn `homeassistant_power_sensor_entity_id` gesetzt ist, verwendet das Add-on diesen Home-Assistant-Sensor als Quelle fuer `grid_power`. In der Ingress-UI werden dafuer nur Sensoren mit Einheit `W` angeboten. Bleibt das Feld leer, nutzt das Add-on weiter `evcc/site/grid/power` per MQTT.

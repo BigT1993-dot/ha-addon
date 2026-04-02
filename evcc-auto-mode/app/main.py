@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib import error, request
 
 import paho.mqtt.client as mqtt
 
@@ -24,6 +25,9 @@ OPTIONS_PATH = "/data/options.json"
 RUNTIME_CONFIG_PATH = "/data/runtime_config.json"
 RUNTIME_STATE_PATH = "/data/runtime_state.json"
 MAX_HISTORY_ENTRIES = 100
+HOME_ASSISTANT_API_URL = "http://supervisor/core/api"
+POWER_SENSOR_CACHE_TTL_SECONDS = 30
+POWER_SENSOR_POLL_INTERVAL_SECONDS = 5
 
 
 class ConfigError(RuntimeError):
@@ -38,6 +42,7 @@ class AddonConfig:
     mqtt_password: str
     mqtt_topic_prefix: str
     loadpoint_id: int
+    homeassistant_power_sensor_entity_id: str
     export_power_threshold_w: float
     import_power_threshold_w: float
     export_delay_seconds: int
@@ -116,6 +121,7 @@ def read_config() -> AddonConfig:
         mqtt_password=raw.get("mqtt_password", "") or "",
         mqtt_topic_prefix=(raw.get("mqtt_topic_prefix") or "evcc").rstrip("/"),
         loadpoint_id=int(raw.get("loadpoint_id", 1)),
+        homeassistant_power_sensor_entity_id=str(raw.get("homeassistant_power_sensor_entity_id", "") or "").strip(),
         export_power_threshold_w=float(raw.get("export_power_threshold_w", -100.0)),
         import_power_threshold_w=float(raw.get("import_power_threshold_w", 100.0)),
         export_delay_seconds=int(raw.get("export_delay_seconds", 60)),
@@ -161,6 +167,7 @@ def config_to_dict(config: AddonConfig) -> dict[str, Any]:
         "mqtt_password": config.mqtt_password,
         "mqtt_topic_prefix": config.mqtt_topic_prefix,
         "loadpoint_id": config.loadpoint_id,
+        "homeassistant_power_sensor_entity_id": config.homeassistant_power_sensor_entity_id,
         "export_power_threshold_w": config.export_power_threshold_w,
         "import_power_threshold_w": config.import_power_threshold_w,
         "export_delay_seconds": config.export_delay_seconds,
@@ -178,6 +185,7 @@ def config_from_payload(payload: dict[str, Any]) -> AddonConfig:
         mqtt_password=str(payload.get("mqtt_password", "") or ""),
         mqtt_topic_prefix=str(payload.get("mqtt_topic_prefix", "evcc") or "evcc").rstrip("/"),
         loadpoint_id=int(payload.get("loadpoint_id", 1)),
+        homeassistant_power_sensor_entity_id=str(payload.get("homeassistant_power_sensor_entity_id", "") or "").strip(),
         export_power_threshold_w=float(payload.get("export_power_threshold_w", -100.0)),
         import_power_threshold_w=float(payload.get("import_power_threshold_w", 100.0)),
         export_delay_seconds=int(payload.get("export_delay_seconds", 60)),
@@ -207,14 +215,14 @@ class EvccAutoMode:
         self.current_mode = ""
         self.offered_current = 0.0
         self.grid_power = 0.0
+        self.grid_power_source = "mqtt"
+        self.grid_power_updated_at: float | None = None
         self.buffer_soc: float | None = None
         self.battery_soc: float | None = None
         self.auto_mode_active = False
         self.automation_enabled = True
         self.export_timer_started_at: float | None = None
         self.import_timer_started_at: float | None = None
-        self.export_cycle_count = 0
-        self.import_cycle_count = 0
         self.last_mqtt_message_at: float | None = None
         self.last_mode_command: str | None = None
         self.last_mode_command_at: float | None = None
@@ -223,6 +231,10 @@ class EvccAutoMode:
         self.topic_values: dict[str, dict[str, Any]] = {}
         self.history: list[dict[str, Any]] = []
         self.mqtt_connected = False
+        self.supervisor_token = os.getenv("SUPERVISOR_TOKEN", "")
+        self.homeassistant_power_sensor_cache: list[dict[str, str]] = []
+        self.homeassistant_power_sensor_cache_at: float | None = None
+        self.last_power_sensor_poll_at: float | None = None
 
         self._restore_runtime_state()
 
@@ -235,6 +247,7 @@ class EvccAutoMode:
 
         try:
             while not self.shutdown_event.wait(1):
+                self.refresh_grid_power_source()
                 self.evaluate()
         finally:
             server.stop()
@@ -297,8 +310,8 @@ class EvccAutoMode:
                 elif msg.topic == topics["offered_current"]:
                     self.offered_current = parse_float(payload)
                 elif msg.topic == topics["grid_power"]:
-                    self.grid_power = parse_float(payload)
-                    self.update_grid_power_cycles()
+                    if not self.config.homeassistant_power_sensor_entity_id:
+                        self.update_grid_power(parse_float(payload), source="mqtt")
                 elif msg.topic == topics["buffer_soc"]:
                     self.buffer_soc = parse_optional_float(payload)
                 elif msg.topic == topics["battery_soc"]:
@@ -311,6 +324,18 @@ class EvccAutoMode:
 
     def evaluate(self) -> None:
         with self.state_lock:
+            now = time.monotonic()
+
+            if self.grid_power <= self.config.export_power_threshold_w:
+                self.export_timer_started_at = self.export_timer_started_at or now
+            else:
+                self.export_timer_started_at = None
+
+            if self.grid_power >= self.config.import_power_threshold_w:
+                self.import_timer_started_at = self.import_timer_started_at or now
+            else:
+                self.import_timer_started_at = None
+
             if not self.connected and self.auto_mode_active:
                 LOGGER.info("Vehicle disconnected; clearing auto mode state")
                 self.set_auto_mode_active(False, reason="vehicle disconnected", source="automation")
@@ -320,42 +345,29 @@ class EvccAutoMode:
                 self.last_restore_reason = "automation stopped by user"
                 return
 
-            should_set_minpv, set_reason = self.should_set_minpv()
+            should_set_minpv, set_reason = self.should_set_minpv(now)
             self.last_decision_reason = set_reason
             if should_set_minpv:
                 self.publish_mode("minpv", reason=set_reason)
                 self.set_auto_mode_active(True, reason=f"set minpv: {set_reason}", source="automation")
 
-            should_restore_pv, restore_reason = self.should_restore_pv()
+            should_restore_pv, restore_reason = self.should_restore_pv(now)
             self.last_restore_reason = restore_reason
             if should_restore_pv:
                 self.publish_mode("pv", reason=restore_reason)
                 self.set_auto_mode_active(False, reason=f"restored pv: {restore_reason}", source="automation")
 
-    def update_grid_power_cycles(self) -> None:
-        now = time.monotonic()
-
-        if self.grid_power <= self.config.export_power_threshold_w:
-            self.export_cycle_count += 1
-            self.export_timer_started_at = self.export_timer_started_at or now
-        else:
-            self.export_cycle_count = 0
-            self.export_timer_started_at = None
-
-        if self.grid_power >= self.config.import_power_threshold_w:
-            self.import_cycle_count += 1
-            self.import_timer_started_at = self.import_timer_started_at or now
-        else:
-            self.import_cycle_count = 0
-            self.import_timer_started_at = None
-
-    def should_set_minpv(self) -> tuple[bool, str]:
+    def should_set_minpv(self, now: float) -> tuple[bool, str]:
         blockers: list[str] = []
 
         if not self.automation_enabled:
             blockers.append("automation stopped by user")
         if not self.connected:
             blockers.append("vehicle not connected")
+        if self.grid_power_updated_at is None:
+            blockers.append("grid power source has not delivered data yet")
+        elif now - self.grid_power_updated_at > POWER_SENSOR_POLL_INTERVAL_SECONDS * 3:
+            blockers.append("grid power data is stale")
         if self.plan_active:
             blockers.append("charging plan is active")
         if self.auto_mode_active:
@@ -364,12 +376,12 @@ class EvccAutoMode:
             blockers.append("evcc already in minpv")
         if self.offered_current > self.config.evcc_active_current_threshold:
             blockers.append("evcc is actively regulating current")
-        if self.export_cycle_count == 0:
+        if self.export_timer_started_at is None:
             blockers.append(
                 f"no sustained export detected at or below {format_threshold(self.config.export_power_threshold_w)} W"
             )
-        elif self.export_cycle_count < 2:
-            blockers.append(f"waiting for second export MQTT cycle ({self.export_cycle_count}/2)")
+        elif now - self.export_timer_started_at < self.config.export_delay_seconds:
+            blockers.append("export delay not reached yet")
         if self.battery_soc is None or self.buffer_soc is None:
             blockers.append("battery or buffer SoC missing")
         elif self.battery_soc >= self.buffer_soc:
@@ -378,16 +390,97 @@ class EvccAutoMode:
             return False, "; ".join(blockers)
         return True, "all activation conditions met"
 
-    def should_restore_pv(self) -> tuple[bool, str]:
+    def should_restore_pv(self, now: float) -> tuple[bool, str]:
         if not self.auto_mode_active:
             return False, "auto mode not active"
-        if self.import_cycle_count == 0:
+        if self.grid_power_updated_at is None:
+            return False, "grid power source has not delivered data yet"
+        if now - self.grid_power_updated_at > POWER_SENSOR_POLL_INTERVAL_SECONDS * 3:
+            return False, "grid power data is stale"
+        if self.import_timer_started_at is None:
             return False, f"no sustained grid import detected at or above {format_threshold(self.config.import_power_threshold_w)} W"
-        if self.import_cycle_count < 2:
-            return False, f"waiting for second import MQTT cycle ({self.import_cycle_count}/2)"
+        if now - self.import_timer_started_at < self.config.import_delay_seconds:
+            return False, "import delay not reached yet"
         if self.current_mode == "pv":
             return False, "evcc already in pv"
         return True, "all restore conditions met"
+
+    def update_grid_power(self, value: float, source: str) -> None:
+        self.grid_power = value
+        self.grid_power_source = source
+        self.grid_power_updated_at = time.monotonic()
+
+    def refresh_grid_power_source(self) -> None:
+        entity_id = self.config.homeassistant_power_sensor_entity_id
+        if not entity_id:
+            return
+
+        now = time.monotonic()
+        if self.last_power_sensor_poll_at is not None and now - self.last_power_sensor_poll_at < POWER_SENSOR_POLL_INTERVAL_SECONDS:
+            return
+        self.last_power_sensor_poll_at = now
+
+        try:
+            state = self.fetch_homeassistant_state(entity_id)
+            value = parse_float(str(state["state"]))
+        except Exception:
+            LOGGER.exception("Failed to refresh Home Assistant power sensor %s", entity_id)
+            return
+
+        with self.state_lock:
+            self.update_grid_power(value, source=f"homeassistant:{entity_id}")
+
+    def fetch_homeassistant_state(self, entity_id: str) -> dict[str, Any]:
+        return self.homeassistant_api_get(f"/states/{entity_id}")
+
+    def list_homeassistant_power_sensors(self) -> list[dict[str, str]]:
+        now = time.monotonic()
+        if self.homeassistant_power_sensor_cache_at is not None and now - self.homeassistant_power_sensor_cache_at < POWER_SENSOR_CACHE_TTL_SECONDS:
+            return self.homeassistant_power_sensor_cache
+
+        try:
+            states = self.homeassistant_api_get("/states")
+        except Exception:
+            LOGGER.exception("Failed to list Home Assistant power sensors")
+            return self.homeassistant_power_sensor_cache
+
+        sensors: list[dict[str, str]] = []
+        for state in states:
+            entity_id = str(state.get("entity_id", ""))
+            if not entity_id.startswith("sensor."):
+                continue
+            attributes = state.get("attributes", {})
+            if str(attributes.get("unit_of_measurement", "")).strip() != "W":
+                continue
+            sensors.append(
+                {
+                    "entity_id": entity_id,
+                    "name": str(attributes.get("friendly_name") or entity_id),
+                }
+            )
+        sensors.sort(key=lambda item: item["name"].lower())
+        self.homeassistant_power_sensor_cache = sensors
+        self.homeassistant_power_sensor_cache_at = now
+        return sensors
+
+    def homeassistant_api_get(self, path: str) -> Any:
+        if not self.supervisor_token:
+            raise RuntimeError("SUPERVISOR_TOKEN is not available")
+
+        req = request.Request(
+            f"{HOME_ASSISTANT_API_URL}{path}",
+            headers={
+                "Authorization": f"Bearer {self.supervisor_token}",
+                "Content-Type": "application/json",
+            },
+            method="GET",
+        )
+        try:
+            with request.urlopen(req, timeout=10) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except error.HTTPError as err:
+            body = err.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"Home Assistant API error {err.code}: {body}") from err
 
     def publish_mode(self, mode: str, reason: str, source: str = "automation") -> None:
         topic = self.config.topics["mode_set"]
@@ -606,6 +699,7 @@ class EvccAutoMode:
                 "config": {
                     **config_to_dict(self.config),
                     "mqtt_password": mask_secret(self.config.mqtt_password),
+                    "power_sensor_options": self.list_homeassistant_power_sensors(),
                 },
                 "topics": self.config.topics,
                 "state": {
@@ -615,22 +709,23 @@ class EvccAutoMode:
                     "current_mode": self.current_mode,
                     "offered_current": self.offered_current,
                     "grid_power": self.grid_power,
+                    "grid_power_source": self.grid_power_source,
                     "buffer_soc": self.buffer_soc,
                     "battery_soc": self.battery_soc,
-                    "export_cycle_count": self.export_cycle_count,
-                    "import_cycle_count": self.import_cycle_count,
                     "automation_enabled": self.automation_enabled,
                     "auto_mode_active": self.auto_mode_active,
                     "last_decision_reason": self.last_decision_reason,
                     "last_restore_reason": self.last_restore_reason,
                     "last_mode_command": self.last_mode_command,
                     "last_mqtt_message_age_seconds": elapsed_seconds(self.last_mqtt_message_at, now),
+                    "grid_power_age_seconds": elapsed_seconds(self.grid_power_updated_at, now),
                     "last_mode_command_age_seconds": elapsed_seconds(self.last_mode_command_at, now),
                     "export_timer_age_seconds": elapsed_seconds(self.export_timer_started_at, now),
                     "import_timer_age_seconds": elapsed_seconds(self.import_timer_started_at, now),
                 },
                 "topic_values": self.topic_values,
                 "history": self.history,
+                "power_sensor_options": self.list_homeassistant_power_sensors(),
             }
 
     def update_config(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -657,16 +752,18 @@ class EvccAutoMode:
             self.last_mqtt_message_at = None
             self.export_timer_started_at = None
             self.import_timer_started_at = None
-            self.export_cycle_count = 0
-            self.import_cycle_count = 0
             self.current_mode = ""
             self.grid_power = 0.0
+            self.grid_power_source = "mqtt"
+            self.grid_power_updated_at = None
             self.offered_current = 0.0
             self.connected = False
             self.plan_active = False
             self.buffer_soc = None
             self.battery_soc = None
             self.auto_mode_active = False
+            self.homeassistant_power_sensor_cache_at = None
+            self.last_power_sensor_poll_at = None
 
         write_runtime_config(next_config)
         self.record_event(
@@ -945,6 +1042,14 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       color: var(--ink);
       background: white;
     }}
+    select {{
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font: inherit;
+      color: var(--ink);
+      background: white;
+    }}
     button {{
       border: 0;
       border-radius: 999px;
@@ -1041,6 +1146,7 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
             mqtt_password: formData.get("mqtt_password"),
             mqtt_topic_prefix: formData.get("mqtt_topic_prefix"),
             loadpoint_id: Number(formData.get("loadpoint_id")),
+            homeassistant_power_sensor_entity_id: formData.get("homeassistant_power_sensor_entity_id"),
             export_power_threshold_w: Number(formData.get("export_power_threshold_w")),
             import_power_threshold_w: Number(formData.get("import_power_threshold_w")),
             export_delay_seconds: Number(formData.get("export_delay_seconds")),
@@ -1161,6 +1267,10 @@ def render_topics_table(topics: dict[str, str], topic_values: dict[str, dict[str
 
 def render_config_form(config: dict[str, Any]) -> str:
     auto_reset_checked = "true" if config["auto_reset_on_restart"] else "false"
+    sensor_options = render_power_sensor_options(
+        config.get("homeassistant_power_sensor_entity_id", ""),
+        config.get("power_sensor_options", []),
+    )
     return f"""
 <form id="config-form">
   <div class="form-grid">
@@ -1170,6 +1280,11 @@ def render_config_form(config: dict[str, Any]) -> str:
     <label>MQTT Password<input name="mqtt_password" type="password" value=""></label>
     <label>MQTT Prefix<input name="mqtt_topic_prefix" value="{escape_html(str(config["mqtt_topic_prefix"]))}" required></label>
     <label>Loadpoint ID<input name="loadpoint_id" type="number" min="1" value="{escape_html(str(config["loadpoint_id"]))}" required></label>
+    <label>Home Assistant Power Sensor
+      <select name="homeassistant_power_sensor_entity_id">
+        {sensor_options}
+      </select>
+    </label>
     <label>Export Threshold (W)<input name="export_power_threshold_w" type="number" step="1" value="{escape_html(str(config["export_power_threshold_w"]))}" required></label>
     <label>Import Threshold (W)<input name="import_power_threshold_w" type="number" step="1" value="{escape_html(str(config["import_power_threshold_w"]))}" required></label>
     <label>Export Delay (s)<input name="export_delay_seconds" type="number" min="1" value="{escape_html(str(config["export_delay_seconds"]))}" required></label>
@@ -1185,10 +1300,24 @@ def render_config_form(config: dict[str, Any]) -> str:
   </datalist>
   <div class="actions">
     <button type="submit">Save Config</button>
-    <div class="status" id="save-status">Password stays unchanged if left empty.</div>
+    <div class="status" id="save-status">Password stays unchanged if left empty. Leave the sensor empty to keep using evcc MQTT grid power.</div>
   </div>
 </form>
 """
+
+
+def render_power_sensor_options(selected_entity_id: str, options: list[dict[str, str]]) -> str:
+    rows = [
+        '<option value="">Use evcc MQTT grid power</option>',
+    ]
+    for option in options:
+        entity_id = option["entity_id"]
+        selected = ' selected' if entity_id == selected_entity_id else ""
+        label = f'{option["name"]} ({entity_id})'
+        rows.append(
+            f'<option value="{escape_html(entity_id)}"{selected}>{escape_html(label)}</option>'
+        )
+    return "".join(rows)
 
 
 def render_automation_controls(state: dict[str, Any]) -> str:
