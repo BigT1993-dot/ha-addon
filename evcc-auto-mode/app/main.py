@@ -23,6 +23,7 @@ LOGGER = logging.getLogger("evcc_auto_mode")
 OPTIONS_PATH = "/data/options.json"
 RUNTIME_CONFIG_PATH = "/data/runtime_config.json"
 RUNTIME_STATE_PATH = "/data/runtime_state.json"
+MAX_HISTORY_ENTRIES = 100
 
 
 class ConfigError(RuntimeError):
@@ -153,7 +154,7 @@ class EvccAutoMode:
         self.client.on_message = self.on_message
         self.client.on_disconnect = self.on_disconnect
 
-        self.state_lock = threading.Lock()
+        self.state_lock = threading.RLock()
         self.shutdown_event = threading.Event()
 
         self.connected = False
@@ -164,6 +165,7 @@ class EvccAutoMode:
         self.buffer_soc: float | None = None
         self.battery_soc: float | None = None
         self.auto_mode_active = False
+        self.automation_enabled = True
         self.export_timer_started_at: float | None = None
         self.import_timer_started_at: float | None = None
         self.last_mqtt_message_at: float | None = None
@@ -172,6 +174,7 @@ class EvccAutoMode:
         self.last_decision_reason = "waiting for MQTT data"
         self.last_restore_reason = "waiting for MQTT data"
         self.topic_values: dict[str, dict[str, Any]] = {}
+        self.history: list[dict[str, Any]] = []
         self.mqtt_connected = False
 
         self._restore_runtime_state()
@@ -228,10 +231,18 @@ class EvccAutoMode:
                 elif msg.topic == topics["plan_active"]:
                     self.plan_active = parse_bool(payload)
                 elif msg.topic == topics["mode"]:
+                    previous_mode = self.current_mode
                     self.current_mode = payload
+                    if payload != previous_mode:
+                        self.record_event(
+                            "mode_observed",
+                            f"Observed evcc mode {payload}",
+                            reason="mode topic updated",
+                            details={"previous_mode": previous_mode or None, "current_mode": payload},
+                        )
                     if payload != "minpv" and self.auto_mode_active:
                         LOGGER.info("Mode changed externally to %s; clearing auto flag", payload)
-                        self.set_auto_mode_active(False)
+                        self.set_auto_mode_active(False, reason=f"evcc mode changed externally to {payload}", source="mqtt")
                 elif msg.topic == topics["offered_current"]:
                     self.offered_current = parse_float(payload)
                 elif msg.topic == topics["grid_power"]:
@@ -262,23 +273,30 @@ class EvccAutoMode:
 
             if not self.connected and self.auto_mode_active:
                 LOGGER.info("Vehicle disconnected; clearing auto mode state")
-                self.set_auto_mode_active(False)
+                self.set_auto_mode_active(False, reason="vehicle disconnected", source="automation")
+
+            if not self.automation_enabled:
+                self.last_decision_reason = "automation stopped by user"
+                self.last_restore_reason = "automation stopped by user"
+                return
 
             should_set_minpv, set_reason = self.should_set_minpv(now)
             self.last_decision_reason = set_reason
             if should_set_minpv:
-                self.publish_mode("minpv")
-                self.set_auto_mode_active(True)
+                self.publish_mode("minpv", reason=set_reason)
+                self.set_auto_mode_active(True, reason=f"set minpv: {set_reason}", source="automation")
 
             should_restore_pv, restore_reason = self.should_restore_pv(now)
             self.last_restore_reason = restore_reason
             if should_restore_pv:
-                self.publish_mode("pv")
-                self.set_auto_mode_active(False)
+                self.publish_mode("pv", reason=restore_reason)
+                self.set_auto_mode_active(False, reason=f"restored pv: {restore_reason}", source="automation")
 
     def should_set_minpv(self, now: float) -> tuple[bool, str]:
         blockers: list[str] = []
 
+        if not self.automation_enabled:
+            blockers.append("automation stopped by user")
         if not self.connected:
             blockers.append("vehicle not connected")
         if self.plan_active:
@@ -312,37 +330,106 @@ class EvccAutoMode:
             return False, "evcc already in pv"
         return True, "all restore conditions met"
 
-    def publish_mode(self, mode: str) -> None:
+    def publish_mode(self, mode: str, reason: str, source: str = "automation") -> None:
         topic = self.config.topics["mode_set"]
         LOGGER.info("Publishing %s to %s", mode, topic)
         self.last_mode_command = mode
         self.last_mode_command_at = time.monotonic()
         result = self.client.publish(topic, payload=mode, qos=1, retain=False)
+        event_details = {
+            "topic": topic,
+            "mode": mode,
+            "source": source,
+            "result_code": result.rc,
+        }
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
             LOGGER.error("Failed publishing mode %s: rc=%s", mode, result.rc)
+            self.record_event(
+                "mode_command_failed",
+                f"Failed to publish mode {mode}",
+                reason=reason,
+                details=event_details,
+            )
+            return
+
+        self.record_event(
+            "mode_command",
+            f"Published mode {mode}",
+            reason=reason,
+            details=event_details,
+        )
 
     def _restore_runtime_state(self) -> None:
         state = read_runtime_state()
+        self.history = list(state.get("history", []))
+        self.automation_enabled = parse_config_bool(state.get("automation_enabled", True))
         if self.config.auto_reset_on_restart:
             self.auto_mode_active = False
             self.persist_runtime_state()
             return
 
-        self.auto_mode_active = bool(state.get("auto_mode_active", False))
+        self.auto_mode_active = parse_config_bool(state.get("auto_mode_active", False))
 
     def persist_runtime_state(self) -> None:
         write_runtime_state(
             {
                 "auto_mode_active": self.auto_mode_active,
+                "automation_enabled": self.automation_enabled,
+                "history": self.history,
                 "updated_at": iso_utc_now(),
             }
         )
 
-    def set_auto_mode_active(self, active: bool) -> None:
+    def set_auto_mode_active(self, active: bool, reason: str, source: str) -> None:
         if self.auto_mode_active == active:
             return
 
         self.auto_mode_active = active
+        self.record_event(
+            "auto_mode_state",
+            f"auto_mode_active set to {format_value(active)}",
+            reason=reason,
+            details={"source": source, "auto_mode_active": active},
+        )
+        self.persist_runtime_state()
+
+    def set_automation_enabled(self, enabled: bool, reason: str, source: str) -> None:
+        with self.state_lock:
+            if self.automation_enabled == enabled:
+                return
+
+            self.automation_enabled = enabled
+            if not enabled:
+                self.auto_mode_active = False
+                self.last_decision_reason = "automation stopped by user"
+                self.last_restore_reason = "automation stopped by user"
+            else:
+                self.last_decision_reason = "automation re-enabled"
+                self.last_restore_reason = "automation re-enabled"
+
+            self.record_event(
+                "automation_toggle",
+                f"automation_enabled set to {format_value(enabled)}",
+                reason=reason,
+                details={"source": source, "automation_enabled": enabled},
+            )
+            self.persist_runtime_state()
+
+    def record_event(
+        self,
+        event_type: str,
+        message: str,
+        reason: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        event = {
+            "timestamp": iso_utc_now(),
+            "type": event_type,
+            "message": message,
+            "reason": reason,
+            "details": details or {},
+        }
+        self.history = ([event] + self.history)[:MAX_HISTORY_ENTRIES]
         self.persist_runtime_state()
 
     def get_debug_snapshot(self) -> dict[str, Any]:
@@ -364,6 +451,7 @@ class EvccAutoMode:
                     "grid_power": self.grid_power,
                     "buffer_soc": self.buffer_soc,
                     "battery_soc": self.battery_soc,
+                    "automation_enabled": self.automation_enabled,
                     "auto_mode_active": self.auto_mode_active,
                     "last_decision_reason": self.last_decision_reason,
                     "last_restore_reason": self.last_restore_reason,
@@ -374,6 +462,7 @@ class EvccAutoMode:
                     "import_timer_age_seconds": elapsed_seconds(self.import_timer_started_at, now),
                 },
                 "topic_values": self.topic_values,
+                "history": self.history,
             }
 
     def update_config(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -381,6 +470,7 @@ class EvccAutoMode:
             payload["mqtt_password"] = self.config.mqtt_password
         next_config = config_from_payload(payload)
         validate_config(next_config)
+        config_changes = describe_config_changes(self.config, next_config)
 
         reconnect_required = (
             next_config.mqtt_host != self.config.mqtt_host
@@ -409,11 +499,23 @@ class EvccAutoMode:
             self.auto_mode_active = False
 
         write_runtime_config(next_config)
+        self.record_event(
+            "config_update",
+            "Configuration updated via ingress UI",
+            reason="user saved configuration",
+            details={"changes": config_changes},
+        )
         self.persist_runtime_state()
         if reconnect_required:
             self.reconnect_mqtt()
 
         LOGGER.info("Configuration updated via ingress UI")
+        return self.get_debug_snapshot()
+
+    def update_automation(self, payload: dict[str, Any]) -> dict[str, Any]:
+        enabled = parse_config_bool(payload["enabled"])
+        reason = str(payload.get("reason") or "user pressed automation control").strip()
+        self.set_automation_enabled(enabled, reason=reason, source="ui")
         return self.get_debug_snapshot()
 
     def reconnect_mqtt(self) -> None:
@@ -465,7 +567,7 @@ class DebugServer:
                 self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
             def do_POST(self) -> None:
-                if self.path != "/api/config":
+                if self.path not in {"/api/config", "/api/automation"}:
                     self.send_error(HTTPStatus.NOT_FOUND, "Not found")
                     return
 
@@ -473,7 +575,10 @@ class DebugServer:
                     content_length = int(self.headers.get("Content-Length", "0"))
                     raw = self.rfile.read(content_length)
                     payload = json.loads(raw.decode("utf-8"))
-                    snapshot = worker.update_config(payload)
+                    if self.path == "/api/config":
+                        snapshot = worker.update_config(payload)
+                    else:
+                        snapshot = worker.update_automation(payload)
                 except (json.JSONDecodeError, ValueError, KeyError) as err:
                     response = json.dumps({"error": str(err)}).encode("utf-8")
                     self.send_response(HTTPStatus.BAD_REQUEST)
@@ -570,6 +675,7 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       --muted: #5b6a70;
       --line: #d8d1c3;
       --accent: #176b5a;
+      --danger: #b53131;
       --warn: #9a5b00;
     }}
     body {{
@@ -673,6 +779,12 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       font-size: 0.9rem;
       color: var(--muted);
     }}
+    .button-danger {{
+      background: var(--danger);
+    }}
+    .button-secondary {{
+      background: #395761;
+    }}
   </style>
 </head>
 <body>
@@ -701,13 +813,26 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
         <div class="value">{escape_html(str(snapshot["state"]["last_restore_reason"]))}</div>
       </section>
       <section class="card">
+        <h2>Automation Control</h2>
+        {render_automation_controls(snapshot["state"])}
+      </section>
+    </div>
+    <div class="grid" style="margin-top: 16px;">
+      <section class="card">
         <h2>Config</h2>
         {render_config_form(snapshot["config"])}
+      </section>
+      <section class="card">
+        <h2>History</h2>
+        {render_history_table(snapshot["history"])}
       </section>
     </div>
     <script>
       const form = document.getElementById("config-form");
       const status = document.getElementById("save-status");
+      const automationStatus = document.getElementById("automation-status");
+      const stopButton = document.getElementById("automation-stop");
+      const startButton = document.getElementById("automation-start");
       if (form) {{
         form.addEventListener("submit", async (event) => {{
           event.preventDefault();
@@ -741,6 +866,33 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
             status.textContent = `Save failed: ${{error.message}}`;
           }}
         }});
+      }}
+      async function toggleAutomation(enabled, reason) {{
+        if (!automationStatus) {{
+          return;
+        }}
+        automationStatus.textContent = enabled ? "Starting automation..." : "Stopping automation...";
+        try {{
+          const response = await fetch("/api/automation", {{
+            method: "POST",
+            headers: {{ "Content-Type": "application/json" }},
+            body: JSON.stringify({{ enabled, reason }}),
+          }});
+          const data = await response.json();
+          if (!response.ok) {{
+            throw new Error(data.error || "Automation update failed");
+          }}
+          automationStatus.textContent = "Saved. Reloading state...";
+          window.location.reload();
+        }} catch (error) {{
+          automationStatus.textContent = `Save failed: ${{error.message}}`;
+        }}
+      }}
+      if (stopButton) {{
+        stopButton.addEventListener("click", () => toggleAutomation(false, "user pressed STOP automation"));
+      }}
+      if (startButton) {{
+        startButton.addEventListener("click", () => toggleAutomation(true, "user pressed START automation"));
       }}
     </script>
   </main>
@@ -808,6 +960,41 @@ def render_config_form(config: dict[str, Any]) -> str:
 """
 
 
+def render_automation_controls(state: dict[str, Any]) -> str:
+    enabled = bool(state["automation_enabled"])
+    automation_text = "running" if enabled else "stopped"
+    return f"""
+<div class="label">Automation State</div>
+<div class="value">{escape_html(automation_text)}</div>
+<div class="actions">
+  <button type="button" class="button-danger" id="automation-stop">STOP Automation</button>
+  <button type="button" class="button-secondary" id="automation-start">Start Automation</button>
+  <div class="status" id="automation-status">Stop clears the add-on's automation ownership and prevents further MQTT writes until restarted.</div>
+</div>
+"""
+
+
+def render_history_table(history: list[dict[str, Any]]) -> str:
+    if not history:
+        return '<div class="muted">No history recorded yet.</div>'
+
+    rows = []
+    for entry in history[:25]:
+        rows.append(
+            "<tr>"
+            f"<td class=\"muted\">{escape_html(str(entry.get('timestamp', 'n/a')))}</td>"
+            f"<td><strong>{escape_html(str(entry.get('message', 'n/a')))}</strong><br><span class=\"muted\">{escape_html(str(entry.get('type', 'n/a')))}</span></td>"
+            f"<td>{escape_html(str(entry.get('reason', 'n/a')))}</td>"
+            f"<td><code>{escape_html(json.dumps(entry.get('details', {}), ensure_ascii=True))}</code></td>"
+            "</tr>"
+        )
+    return (
+        "<table><thead><tr><th>Time</th><th>Event</th><th>Reason</th><th>Details</th></tr></thead><tbody>"
+        + "".join(rows)
+        + "</tbody></table>"
+    )
+
+
 def format_value(value: Any) -> str:
     if value is None:
         return "n/a"
@@ -829,6 +1016,21 @@ def mask_secret(value: str) -> str:
     if not value:
         return ""
     return "*" * 8
+
+
+def describe_config_changes(current: AddonConfig, updated: AddonConfig) -> dict[str, Any]:
+    changes: dict[str, Any] = {}
+    current_config = config_to_dict(current)
+    updated_config = config_to_dict(updated)
+    for key, current_value in current_config.items():
+        updated_value = updated_config[key]
+        if current_value == updated_value:
+            continue
+        if key == "mqtt_password":
+            changes[key] = "updated"
+            continue
+        changes[key] = {"from": current_value, "to": updated_value}
+    return changes
 
 
 def validate_config(config: AddonConfig) -> None:

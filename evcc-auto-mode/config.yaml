@@ -1,5 +1,5 @@
 name: evcc Auto Mode
-version: "0.2.3"
+version: "0.2.4"
 slug: evcc_auto_mode
 description: Automatically switch evcc between pv and minpv via MQTT.
 url: "https://github.com/BigT1993-dot/ha-addon/tree/main/evcc-auto-mode"
