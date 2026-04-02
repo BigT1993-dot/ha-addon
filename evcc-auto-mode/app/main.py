@@ -62,6 +62,30 @@ class AddonConfig:
             "plan_active": f"{self.loadpoint_prefix}/planActive",
         }
 
+    @property
+    def ha_discovery_prefix(self) -> str:
+        return "homeassistant"
+
+    @property
+    def ha_sensor_object_id(self) -> str:
+        return f"evcc_auto_mode_loadpoint_{self.loadpoint_id}_last_action"
+
+    @property
+    def ha_state_topic(self) -> str:
+        return f"{self.mqtt_topic_prefix}/addon/evcc-auto-mode/loadpoints/{self.loadpoint_id}/last_action/state"
+
+    @property
+    def ha_attributes_topic(self) -> str:
+        return f"{self.mqtt_topic_prefix}/addon/evcc-auto-mode/loadpoints/{self.loadpoint_id}/last_action/attributes"
+
+    @property
+    def ha_availability_topic(self) -> str:
+        return f"{self.mqtt_topic_prefix}/addon/evcc-auto-mode/status"
+
+    @property
+    def ha_discovery_topic(self) -> str:
+        return f"{self.ha_discovery_prefix}/sensor/{self.ha_sensor_object_id}/config"
+
 
 def read_config() -> AddonConfig:
     try:
@@ -157,6 +181,7 @@ class EvccAutoMode:
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         if config.mqtt_username:
             self.client.username_pw_set(config.mqtt_username, config.mqtt_password)
+        self.client.will_set(config.ha_availability_topic, payload="offline", qos=1, retain=True)
 
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
@@ -216,6 +241,9 @@ class EvccAutoMode:
         topics = self.config.topics
         for topic in topics.values():
             client.subscribe(topic)
+        self.publish_home_assistant_discovery()
+        self.publish_availability("online")
+        self.publish_latest_action_sensor()
         LOGGER.info("Subscribed to %s topics", len(topics))
 
     def on_disconnect(self, _client: mqtt.Client, _userdata: Any, _disconnect_flags: Any, reason_code: Any, _properties: Any) -> None:
@@ -369,6 +397,66 @@ class EvccAutoMode:
             details=event_details,
         )
 
+    def publish_home_assistant_discovery(self) -> None:
+        discovery_payload = {
+            "name": "evcc Auto Mode Last Action",
+            "unique_id": self.config.ha_sensor_object_id,
+            "state_topic": self.config.ha_state_topic,
+            "json_attributes_topic": self.config.ha_attributes_topic,
+            "availability_topic": self.config.ha_availability_topic,
+            "payload_available": "online",
+            "payload_not_available": "offline",
+            "icon": "mdi:bell-outline",
+            "device": {
+                "identifiers": [f"evcc_auto_mode_loadpoint_{self.config.loadpoint_id}"],
+                "name": f"evcc Auto Mode Loadpoint {self.config.loadpoint_id}",
+                "manufacturer": "BigT1993",
+                "model": "evcc Auto Mode",
+            },
+        }
+        self.client.publish(
+            self.config.ha_discovery_topic,
+            payload=json.dumps(discovery_payload, ensure_ascii=True),
+            qos=1,
+            retain=True,
+        )
+
+    def publish_availability(self, state: str) -> None:
+        self.client.publish(self.config.ha_availability_topic, payload=state, qos=1, retain=True)
+
+    def publish_latest_action_sensor(self) -> None:
+        latest_action = next(
+            (
+                entry
+                for entry in self.history
+                if entry.get("type") in {"mode_command", "mode_command_failed"}
+            ),
+            None,
+        )
+        if latest_action is None:
+            return
+        self.publish_action_sensor(latest_action)
+
+    def publish_action_sensor(self, event: dict[str, Any]) -> None:
+        attributes = {
+            "message": event.get("message"),
+            "reason": event.get("reason"),
+            "type": event.get("type"),
+            "details": event.get("details", {}),
+        }
+        self.client.publish(
+            self.config.ha_state_topic,
+            payload=str(event.get("timestamp", "")),
+            qos=1,
+            retain=True,
+        )
+        self.client.publish(
+            self.config.ha_attributes_topic,
+            payload=json.dumps(attributes, ensure_ascii=True),
+            qos=1,
+            retain=True,
+        )
+
     def _restore_runtime_state(self) -> None:
         state = read_runtime_state()
         self.history = list(state.get("history", []))
@@ -440,6 +528,8 @@ class EvccAutoMode:
             "details": details or {},
         }
         self.history = ([event] + self.history)[:MAX_HISTORY_ENTRIES]
+        if event_type in {"mode_command", "mode_command_failed"} and self.mqtt_connected:
+            self.publish_action_sensor(event)
         self.persist_runtime_state()
 
     def get_debug_snapshot(self) -> dict[str, Any]:
@@ -540,6 +630,7 @@ class EvccAutoMode:
             self.client.username_pw_set(self.config.mqtt_username, self.config.mqtt_password)
         else:
             self.client.username_pw_set(None, None)
+        self.client.will_set(self.config.ha_availability_topic, payload="offline", qos=1, retain=True)
 
         self.client.connect(self.config.mqtt_host, self.config.mqtt_port, keepalive=60)
         self.client.loop_start()
