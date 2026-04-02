@@ -22,6 +22,7 @@ logging.basicConfig(
 LOGGER = logging.getLogger("evcc_auto_mode")
 OPTIONS_PATH = "/data/options.json"
 RUNTIME_CONFIG_PATH = "/data/runtime_config.json"
+RUNTIME_STATE_PATH = "/data/runtime_state.json"
 
 
 class ConfigError(RuntimeError):
@@ -79,7 +80,7 @@ def read_config() -> AddonConfig:
         export_delay_seconds=int(raw.get("export_delay_seconds", 60)),
         import_delay_seconds=int(raw.get("import_delay_seconds", 30)),
         evcc_active_current_threshold=float(raw.get("evcc_active_current_threshold", 6.0)),
-        auto_reset_on_restart=bool(raw.get("auto_reset_on_restart", True)),
+        auto_reset_on_restart=parse_config_bool(raw.get("auto_reset_on_restart", True)),
     )
 
 
@@ -94,6 +95,20 @@ def read_runtime_config() -> dict[str, Any]:
 def write_runtime_config(config: AddonConfig) -> None:
     with open(RUNTIME_CONFIG_PATH, "w", encoding="utf-8") as handle:
         json.dump(config_to_dict(config), handle, indent=2)
+        handle.write("\n")
+
+
+def read_runtime_state() -> dict[str, Any]:
+    try:
+        with open(RUNTIME_STATE_PATH, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except FileNotFoundError:
+        return {}
+
+
+def write_runtime_state(state: dict[str, Any]) -> None:
+    with open(RUNTIME_STATE_PATH, "w", encoding="utf-8") as handle:
+        json.dump(state, handle, indent=2)
         handle.write("\n")
 
 
@@ -123,7 +138,7 @@ def config_from_payload(payload: dict[str, Any]) -> AddonConfig:
         export_delay_seconds=int(payload.get("export_delay_seconds", 60)),
         import_delay_seconds=int(payload.get("import_delay_seconds", 30)),
         evcc_active_current_threshold=float(payload.get("evcc_active_current_threshold", 6.0)),
-        auto_reset_on_restart=bool(payload.get("auto_reset_on_restart", True)),
+        auto_reset_on_restart=parse_config_bool(payload.get("auto_reset_on_restart", True)),
     )
 
 
@@ -159,8 +174,7 @@ class EvccAutoMode:
         self.topic_values: dict[str, dict[str, Any]] = {}
         self.mqtt_connected = False
 
-        if config.auto_reset_on_restart:
-            self.auto_mode_active = False
+        self._restore_runtime_state()
 
     def run(self) -> None:
         server = DebugServer(self)
@@ -217,7 +231,7 @@ class EvccAutoMode:
                     self.current_mode = payload
                     if payload != "minpv" and self.auto_mode_active:
                         LOGGER.info("Mode changed externally to %s; clearing auto flag", payload)
-                        self.auto_mode_active = False
+                        self.set_auto_mode_active(False)
                 elif msg.topic == topics["offered_current"]:
                     self.offered_current = parse_float(payload)
                 elif msg.topic == topics["grid_power"]:
@@ -248,39 +262,43 @@ class EvccAutoMode:
 
             if not self.connected and self.auto_mode_active:
                 LOGGER.info("Vehicle disconnected; clearing auto mode state")
-                self.auto_mode_active = False
+                self.set_auto_mode_active(False)
 
             should_set_minpv, set_reason = self.should_set_minpv(now)
             self.last_decision_reason = set_reason
             if should_set_minpv:
                 self.publish_mode("minpv")
-                self.auto_mode_active = True
+                self.set_auto_mode_active(True)
 
             should_restore_pv, restore_reason = self.should_restore_pv(now)
             self.last_restore_reason = restore_reason
             if should_restore_pv:
                 self.publish_mode("pv")
-                self.auto_mode_active = False
+                self.set_auto_mode_active(False)
 
     def should_set_minpv(self, now: float) -> tuple[bool, str]:
+        blockers: list[str] = []
+
         if not self.connected:
-            return False, "vehicle not connected"
+            blockers.append("vehicle not connected")
         if self.plan_active:
-            return False, "charging plan is active"
+            blockers.append("charging plan is active")
         if self.auto_mode_active:
-            return False, "auto mode already active"
+            blockers.append("auto mode already active")
         if self.current_mode == "minpv":
-            return False, "evcc already in minpv"
+            blockers.append("evcc already in minpv")
         if self.offered_current > self.config.evcc_active_current_threshold:
-            return False, "evcc is actively regulating current"
+            blockers.append("evcc is actively regulating current")
         if self.export_timer_started_at is None:
-            return False, "no sustained export detected"
-        if now - self.export_timer_started_at < self.config.export_delay_seconds:
-            return False, "export delay not reached yet"
+            blockers.append("no sustained export detected")
+        elif now - self.export_timer_started_at < self.config.export_delay_seconds:
+            blockers.append("export delay not reached yet")
         if self.battery_soc is None or self.buffer_soc is None:
-            return False, "battery or buffer SoC missing"
-        if self.battery_soc >= self.buffer_soc:
-            return False, "battery SoC is not below buffer SoC"
+            blockers.append("battery or buffer SoC missing")
+        elif self.battery_soc >= self.buffer_soc:
+            blockers.append("battery SoC is not below buffer SoC")
+        if blockers:
+            return False, "; ".join(blockers)
         return True, "all activation conditions met"
 
     def should_restore_pv(self, now: float) -> tuple[bool, str]:
@@ -302,6 +320,30 @@ class EvccAutoMode:
         result = self.client.publish(topic, payload=mode, qos=1, retain=False)
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
             LOGGER.error("Failed publishing mode %s: rc=%s", mode, result.rc)
+
+    def _restore_runtime_state(self) -> None:
+        state = read_runtime_state()
+        if self.config.auto_reset_on_restart:
+            self.auto_mode_active = False
+            self.persist_runtime_state()
+            return
+
+        self.auto_mode_active = bool(state.get("auto_mode_active", False))
+
+    def persist_runtime_state(self) -> None:
+        write_runtime_state(
+            {
+                "auto_mode_active": self.auto_mode_active,
+                "updated_at": iso_utc_now(),
+            }
+        )
+
+    def set_auto_mode_active(self, active: bool) -> None:
+        if self.auto_mode_active == active:
+            return
+
+        self.auto_mode_active = active
+        self.persist_runtime_state()
 
     def get_debug_snapshot(self) -> dict[str, Any]:
         with self.state_lock:
@@ -364,10 +406,10 @@ class EvccAutoMode:
             self.plan_active = False
             self.buffer_soc = None
             self.battery_soc = None
-            if self.config.auto_reset_on_restart:
-                self.auto_mode_active = False
+            self.auto_mode_active = False
 
         write_runtime_config(next_config)
+        self.persist_runtime_state()
         if reconnect_required:
             self.reconnect_mqtt()
 
@@ -479,6 +521,17 @@ def parse_bool(value: str) -> bool:
     if normalized in {"false", "0", "off", "no"}:
         return False
     raise ValueError(f"Invalid boolean: {value}")
+
+
+def parse_config_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return parse_bool(value)
+    if isinstance(value, (int, float)):
+        if value in {0, 1}:
+            return bool(value)
+    raise ValueError(f"Invalid configuration boolean: {value}")
 
 
 def parse_float(value: str) -> float:

@@ -23,6 +23,10 @@ Direkt in der Ingress-Oberflaeche koennen ausserdem die Laufzeitwerte angepasst 
 - Schwelle fuer `offeredCurrent`
 - Verhalten fuer Reset bei Neustart
 
+Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die Debug-Ansicht jetzt alle aktiven Blocker gesammelt an statt nur des ersten Treffers.
+
+Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
+
 ## Verhalten in v1
 
 - Schaltet auf `minpv`, wenn:
