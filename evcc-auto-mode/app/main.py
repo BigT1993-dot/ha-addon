@@ -79,6 +79,18 @@ class AddonConfig:
         return f"{self.mqtt_topic_prefix}/addon/evcc-auto-mode/loadpoints/{self.loadpoint_id}/last_action/attributes"
 
     @property
+    def ha_status_sensor_object_id(self) -> str:
+        return f"evcc_auto_mode_loadpoint_{self.loadpoint_id}_automation_status"
+
+    @property
+    def ha_status_state_topic(self) -> str:
+        return f"{self.mqtt_topic_prefix}/addon/evcc-auto-mode/loadpoints/{self.loadpoint_id}/automation_status/state"
+
+    @property
+    def ha_status_attributes_topic(self) -> str:
+        return f"{self.mqtt_topic_prefix}/addon/evcc-auto-mode/loadpoints/{self.loadpoint_id}/automation_status/attributes"
+
+    @property
     def ha_availability_topic(self) -> str:
         return f"{self.mqtt_topic_prefix}/addon/evcc-auto-mode/status"
 
@@ -246,6 +258,7 @@ class EvccAutoMode:
         self.publish_home_assistant_discovery()
         self.publish_availability("online")
         self.publish_latest_action_sensor()
+        self.publish_automation_status_sensor(reason="worker connected")
         LOGGER.info("Subscribed to %s topics", len(topics))
 
     def on_disconnect(self, _client: mqtt.Client, _userdata: Any, _disconnect_flags: Any, reason_code: Any, _properties: Any) -> None:
@@ -406,7 +419,7 @@ class EvccAutoMode:
         )
 
     def publish_home_assistant_discovery(self) -> None:
-        discovery_payload = {
+        action_discovery_payload = {
             "name": "evcc Auto Mode Last Action",
             "unique_id": self.config.ha_sensor_object_id,
             "state_topic": self.config.ha_state_topic,
@@ -424,7 +437,29 @@ class EvccAutoMode:
         }
         self.client.publish(
             self.config.ha_discovery_topic,
-            payload=json.dumps(discovery_payload, ensure_ascii=True),
+            payload=json.dumps(action_discovery_payload, ensure_ascii=True),
+            qos=1,
+            retain=True,
+        )
+        status_discovery_payload = {
+            "name": "evcc Auto Mode Automation",
+            "unique_id": self.config.ha_status_sensor_object_id,
+            "state_topic": self.config.ha_status_state_topic,
+            "json_attributes_topic": self.config.ha_status_attributes_topic,
+            "availability_topic": self.config.ha_availability_topic,
+            "payload_available": "online",
+            "payload_not_available": "offline",
+            "icon": "mdi:power",
+            "device": {
+                "identifiers": [f"evcc_auto_mode_loadpoint_{self.config.loadpoint_id}"],
+                "name": f"evcc Auto Mode Loadpoint {self.config.loadpoint_id}",
+                "manufacturer": "BigT1993",
+                "model": "evcc Auto Mode",
+            },
+        }
+        self.client.publish(
+            f"{self.config.ha_discovery_prefix}/sensor/{self.config.ha_status_sensor_object_id}/config",
+            payload=json.dumps(status_discovery_payload, ensure_ascii=True),
             qos=1,
             retain=True,
         )
@@ -460,6 +495,27 @@ class EvccAutoMode:
         )
         self.client.publish(
             self.config.ha_attributes_topic,
+            payload=json.dumps(attributes, ensure_ascii=True),
+            qos=1,
+            retain=True,
+        )
+
+    def publish_automation_status_sensor(self, reason: str) -> None:
+        state = "started" if self.automation_enabled else "stopped"
+        attributes = {
+            "reason": reason,
+            "automation_enabled": self.automation_enabled,
+            "auto_mode_active": self.auto_mode_active,
+            "updated_at": iso_utc_now(),
+        }
+        self.client.publish(
+            self.config.ha_status_state_topic,
+            payload=state,
+            qos=1,
+            retain=True,
+        )
+        self.client.publish(
+            self.config.ha_status_attributes_topic,
             payload=json.dumps(attributes, ensure_ascii=True),
             qos=1,
             retain=True,
@@ -519,6 +575,8 @@ class EvccAutoMode:
                 reason=reason,
                 details={"source": source, "automation_enabled": enabled},
             )
+            if self.mqtt_connected:
+                self.publish_automation_status_sensor(reason=reason)
             self.persist_runtime_state()
 
     def record_event(
