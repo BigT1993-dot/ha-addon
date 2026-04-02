@@ -2,6 +2,18 @@
 
 Dieses Home-Assistant-Add-on verbindet sich per MQTT mit `evcc` und schaltet den Lademodus eines konfigurierten Ladepunkts automatisch zwischen `pv` und `minpv`.
 
+## Debug-Ansicht im Add-on
+
+Beim Oeffnen des Add-ons in Home Assistant steht eine Weboberflaeche zur Verfuegung. Dort werden unter anderem angezeigt:
+
+- alle verwendeten MQTT-Topics
+- die letzten empfangenen Payloads je Topic
+- aktueller interner Zustand wie `connected`, `grid_power`, `offeredCurrent`, `batterySoc`, `bufferSoc`
+- Timer fuer Einspeisung und Netzbezug
+- letzter Entscheidungsgrund fuer Aktivierung oder Rueckstellung
+
+Zusatzlich gibt es einen JSON-Endpunkt unter `/api/state`.
+
 ## Verhalten in v1
 
 - Schaltet auf `minpv`, wenn:
