@@ -38,6 +38,8 @@ class AddonConfig:
     mqtt_password: str
     mqtt_topic_prefix: str
     loadpoint_id: int
+    export_power_threshold_w: float
+    import_power_threshold_w: float
     export_delay_seconds: int
     import_delay_seconds: int
     evcc_active_current_threshold: float
@@ -78,6 +80,8 @@ def read_config() -> AddonConfig:
         mqtt_password=raw.get("mqtt_password", "") or "",
         mqtt_topic_prefix=(raw.get("mqtt_topic_prefix") or "evcc").rstrip("/"),
         loadpoint_id=int(raw.get("loadpoint_id", 1)),
+        export_power_threshold_w=float(raw.get("export_power_threshold_w", -100.0)),
+        import_power_threshold_w=float(raw.get("import_power_threshold_w", 100.0)),
         export_delay_seconds=int(raw.get("export_delay_seconds", 60)),
         import_delay_seconds=int(raw.get("import_delay_seconds", 30)),
         evcc_active_current_threshold=float(raw.get("evcc_active_current_threshold", 6.0)),
@@ -121,6 +125,8 @@ def config_to_dict(config: AddonConfig) -> dict[str, Any]:
         "mqtt_password": config.mqtt_password,
         "mqtt_topic_prefix": config.mqtt_topic_prefix,
         "loadpoint_id": config.loadpoint_id,
+        "export_power_threshold_w": config.export_power_threshold_w,
+        "import_power_threshold_w": config.import_power_threshold_w,
         "export_delay_seconds": config.export_delay_seconds,
         "import_delay_seconds": config.import_delay_seconds,
         "evcc_active_current_threshold": config.evcc_active_current_threshold,
@@ -136,6 +142,8 @@ def config_from_payload(payload: dict[str, Any]) -> AddonConfig:
         mqtt_password=str(payload.get("mqtt_password", "") or ""),
         mqtt_topic_prefix=str(payload.get("mqtt_topic_prefix", "evcc") or "evcc").rstrip("/"),
         loadpoint_id=int(payload.get("loadpoint_id", 1)),
+        export_power_threshold_w=float(payload.get("export_power_threshold_w", -100.0)),
+        import_power_threshold_w=float(payload.get("import_power_threshold_w", 100.0)),
         export_delay_seconds=int(payload.get("export_delay_seconds", 60)),
         import_delay_seconds=int(payload.get("import_delay_seconds", 30)),
         evcc_active_current_threshold=float(payload.get("evcc_active_current_threshold", 6.0)),
@@ -261,12 +269,12 @@ class EvccAutoMode:
         with self.state_lock:
             now = time.monotonic()
 
-            if self.grid_power < 0:
+            if self.grid_power <= self.config.export_power_threshold_w:
                 self.export_timer_started_at = self.export_timer_started_at or now
             else:
                 self.export_timer_started_at = None
 
-            if self.grid_power > 0:
+            if self.grid_power >= self.config.import_power_threshold_w:
                 self.import_timer_started_at = self.import_timer_started_at or now
             else:
                 self.import_timer_started_at = None
@@ -308,7 +316,9 @@ class EvccAutoMode:
         if self.offered_current > self.config.evcc_active_current_threshold:
             blockers.append("evcc is actively regulating current")
         if self.export_timer_started_at is None:
-            blockers.append("no sustained export detected")
+            blockers.append(
+                f"no sustained export detected at or below {format_threshold(self.config.export_power_threshold_w)} W"
+            )
         elif now - self.export_timer_started_at < self.config.export_delay_seconds:
             blockers.append("export delay not reached yet")
         if self.battery_soc is None or self.buffer_soc is None:
@@ -323,7 +333,7 @@ class EvccAutoMode:
         if not self.auto_mode_active:
             return False, "auto mode not active"
         if self.import_timer_started_at is None:
-            return False, "no sustained grid import detected"
+            return False, f"no sustained grid import detected at or above {format_threshold(self.config.import_power_threshold_w)} W"
         if now - self.import_timer_started_at < self.config.import_delay_seconds:
             return False, "import delay not reached yet"
         if self.current_mode == "pv":
@@ -845,18 +855,28 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
             mqtt_password: formData.get("mqtt_password"),
             mqtt_topic_prefix: formData.get("mqtt_topic_prefix"),
             loadpoint_id: Number(formData.get("loadpoint_id")),
+            export_power_threshold_w: Number(formData.get("export_power_threshold_w")),
+            import_power_threshold_w: Number(formData.get("import_power_threshold_w")),
             export_delay_seconds: Number(formData.get("export_delay_seconds")),
             import_delay_seconds: Number(formData.get("import_delay_seconds")),
             evcc_active_current_threshold: Number(formData.get("evcc_active_current_threshold")),
             auto_reset_on_restart: formData.get("auto_reset_on_restart") === "true",
           }};
           try {{
-            const response = await fetch("/api/config", {{
+            const response = await fetch("api/config", {{
               method: "POST",
               headers: {{ "Content-Type": "application/json" }},
               body: JSON.stringify(payload),
             }});
-            const data = await response.json();
+            const raw = await response.text();
+            let data = {{}};
+            if (raw) {{
+              try {{
+                data = JSON.parse(raw);
+              }} catch (_error) {{
+                throw new Error(raw);
+              }}
+            }}
             if (!response.ok) {{
               throw new Error(data.error || "Save failed");
             }}
@@ -873,12 +893,20 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
         }}
         automationStatus.textContent = enabled ? "Starting automation..." : "Stopping automation...";
         try {{
-          const response = await fetch("/api/automation", {{
+          const response = await fetch("api/automation", {{
             method: "POST",
             headers: {{ "Content-Type": "application/json" }},
             body: JSON.stringify({{ enabled, reason }}),
           }});
-          const data = await response.json();
+          const raw = await response.text();
+          let data = {{}};
+          if (raw) {{
+            try {{
+              data = JSON.parse(raw);
+            }} catch (_error) {{
+              throw new Error(raw);
+            }}
+          }}
           if (!response.ok) {{
             throw new Error(data.error || "Automation update failed");
           }}
@@ -941,6 +969,8 @@ def render_config_form(config: dict[str, Any]) -> str:
     <label>MQTT Password<input name="mqtt_password" type="password" value=""></label>
     <label>MQTT Prefix<input name="mqtt_topic_prefix" value="{escape_html(str(config["mqtt_topic_prefix"]))}" required></label>
     <label>Loadpoint ID<input name="loadpoint_id" type="number" min="1" value="{escape_html(str(config["loadpoint_id"]))}" required></label>
+    <label>Export Threshold (W)<input name="export_power_threshold_w" type="number" step="1" value="{escape_html(str(config["export_power_threshold_w"]))}" required></label>
+    <label>Import Threshold (W)<input name="import_power_threshold_w" type="number" step="1" value="{escape_html(str(config["import_power_threshold_w"]))}" required></label>
     <label>Export Delay (s)<input name="export_delay_seconds" type="number" min="1" value="{escape_html(str(config["export_delay_seconds"]))}" required></label>
     <label>Import Delay (s)<input name="import_delay_seconds" type="number" min="1" value="{escape_html(str(config["import_delay_seconds"]))}" required></label>
     <label>evcc Active Threshold (A)<input name="evcc_active_current_threshold" type="number" step="0.1" min="0" value="{escape_html(str(config["evcc_active_current_threshold"]))}" required></label>
@@ -1003,6 +1033,12 @@ def format_value(value: Any) -> str:
     return str(value)
 
 
+def format_threshold(value: float) -> str:
+    if value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
 def escape_html(value: str) -> str:
     return (
         value.replace("&", "&amp;")
@@ -1042,6 +1078,10 @@ def validate_config(config: AddonConfig) -> None:
         raise ValueError("mqtt_topic_prefix must not be empty")
     if config.loadpoint_id < 1:
         raise ValueError("loadpoint_id must be >= 1")
+    if config.export_power_threshold_w >= 0:
+        raise ValueError("export_power_threshold_w must be < 0")
+    if config.import_power_threshold_w <= 0:
+        raise ValueError("import_power_threshold_w must be > 0")
     if config.export_delay_seconds < 1:
         raise ValueError("export_delay_seconds must be >= 1")
     if config.import_delay_seconds < 1:

@@ -19,6 +19,7 @@ Direkt in der Ingress-Oberflaeche koennen ausserdem die Laufzeitwerte angepasst 
 - MQTT Host, Port, Benutzername und Passwort
 - Topic-Prefix
 - Loadpoint-ID
+- Export- und Import-Leistungsschwellen in Watt
 - Export- und Import-Delays
 - Schwelle fuer `offeredCurrent`
 - Verhalten fuer Reset bei Neustart
@@ -27,11 +28,13 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
-Neu in `0.2.4`:
+Neu in `0.2.5`:
 
 - grosse `STOP Automation`-Schaltflaeche in der Ingress-Oberflaeche
 - persistente Historie fuer Moduswechsel, Konfigurationsaenderungen und Start/Stop der Automatik
 - protokollierter Grund bei automatischen MQTT-Schreibvorgaengen
+- relative Ingress-API-Aufrufe, damit `STOP Automation` und Konfig-Speichern sauber im Add-on landen
+- Export- und Import-Hysterese ueber konfigurierbare Leistungsschwellen, Standard `-100 W` und `+100 W`
 
 Wenn `STOP Automation` gedrueckt wird, schreibt das Add-on keine weiteren automatischen Moduswechsel mehr, bis die Automatik wieder explizit gestartet wird. Dabei wird auch die interne Eigentuemerschaft `auto_mode_active` geloescht, damit spaetere automatische Rueckstellungen nicht mehr aus altem Zustand heraus passieren.
 
@@ -69,6 +72,8 @@ mqtt_username: ""
 mqtt_password: ""
 mqtt_topic_prefix: evcc
 loadpoint_id: 1
+export_power_threshold_w: -100
+import_power_threshold_w: 100
 export_delay_seconds: 60
 import_delay_seconds: 30
 evcc_active_current_threshold: 6.0
