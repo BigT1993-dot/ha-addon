@@ -29,7 +29,7 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
-Neu in `0.2.15`:
+Neu in `0.2.17`:
 
 - grosse `STOP Automation`-Schaltflaeche in der Ingress-Oberflaeche
 - persistente Historie fuer Moduswechsel, Konfigurationsaenderungen und Start/Stop der Automatik
@@ -42,42 +42,11 @@ Neu in `0.2.15`:
 - Ingress-Debugseite mit automatischem Refresh und zusaetzlichem `Refresh Now`-Knopf
 - Aktivierung und Rueckstellung erst nach zwei aufeinanderfolgenden `grid_power`-MQTT-Zyklen ueber bzw. unter Schwellwert
 - History zeigt standardmaessig nur die letzten 10 Eintraege, aeltere Eintraege erst nach Aufklappen
-- eigener MQTT-Discovery-Sensor fuer den Automatik-Zustand mit State `started` oder `stopped`
 - optionaler Home-Assistant-Leistungssensor als Quelle fuer `grid_power`, in der UI auf Sensoren mit Einheit `W` gefiltert
 - bei Nutzung des Home-Assistant-Leistungssensors wieder zeitbasierte Schaltlogik mit Export-/Import-Delay
 - Home-Assistant-Leistungssensor kann jetzt auch manuell per Entity-ID eingetragen werden, falls die Vorschlagsliste leer bleibt
-- Aktionssensor nutzt jetzt feste Zustandswerte wie `switched_to_minpv` statt Zeitstempel im State
-
-## Home Assistant Sensor
-
-Das Add-on veroeffentlicht per MQTT Discovery einen Sensor fuer die letzte automatische Aktion:
-
-- Entity-Name: `evcc Auto Mode Last Action`
-- State:
-  - `switched_to_minpv`
-  - `switched_to_pv`
-  - `failed_to_switch_minpv`
-  - `failed_to_switch_pv`
-- Attribute:
-  - `timestamp`
-  - `message`
-  - `reason`
-  - `type`
-  - `details`
-
-Der Sensor wird aktualisiert, wenn das Add-on selbst einen Modus per MQTT schreibt, also z. B. bei `minpv` oder `pv`. Darauf kann in Home Assistant direkt eine eigene Benachrichtigungs-Automation triggern.
-
-Zusatzlich veroeffentlicht das Add-on einen zweiten Sensor fuer den allgemeinen Automatik-Zustand:
-
-- Entity-Name: `evcc Auto Mode Automation`
-- State: `started` oder `stopped`
-- Attribute:
-  - `reason`
-  - `automation_enabled`
-  - `auto_mode_active`
-  - `updated_at`
-
-Dieser Sensor aendert sich immer dann, wenn die Automatisierung im Add-on gestartet oder gestoppt wird, und ist damit der bessere Trigger fuer einfache Home-Assistant-Automationen.
+- beim Start werden frueher angelegte MQTT-Discovery-Sensoren des Add-ons aktiv wieder entfernt
+- Supervisor-/Home-Assistant-API-Rechte explizit erweitert, damit `SUPERVISOR_TOKEN` fuer den Sensorzugriff verfuuegbar ist
 
 Wenn `STOP Automation` gedrueckt wird, schreibt das Add-on keine weiteren automatischen Moduswechsel mehr, bis die Automatik wieder explizit gestartet wird. Dabei wird auch die interne Eigentuemerschaft `auto_mode_active` geloescht, damit spaetere automatische Rueckstellungen nicht mehr aus altem Zustand heraus passieren.
 
