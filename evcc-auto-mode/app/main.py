@@ -902,6 +902,10 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       <h1>evcc Auto Mode Debug</h1>
       <div class="muted">Generated at {snapshot["generated_at"]}</div>
       <div class="muted">JSON endpoint: <code>/api/state</code></div>
+      <div class="actions">
+        <button type="button" class="button-secondary" id="page-refresh">Refresh Now</button>
+        <div class="status" id="refresh-status">Auto-refresh every 5s. Pauses while editing form fields.</div>
+      </div>
     </div>
     <div class="grid" style="margin-top: 16px;">
       <section class="card">
@@ -942,6 +946,19 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       const automationStatus = document.getElementById("automation-status");
       const stopButton = document.getElementById("automation-stop");
       const startButton = document.getElementById("automation-start");
+      const refreshButton = document.getElementById("page-refresh");
+      const refreshStatus = document.getElementById("refresh-status");
+      const AUTO_REFRESH_MS = 5000;
+      function isEditingForm() {{
+        const active = document.activeElement;
+        if (!active) {{
+          return false;
+        }}
+        return active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT";
+      }}
+      async function refreshPageNow() {{
+        window.location.reload();
+      }}
       if (form) {{
         form.addEventListener("submit", async (event) => {{
           event.preventDefault();
@@ -1021,6 +1038,21 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       if (startButton) {{
         startButton.addEventListener("click", () => toggleAutomation(true, "user pressed START automation"));
       }}
+      if (refreshButton) {{
+        refreshButton.addEventListener("click", refreshPageNow);
+      }}
+      window.setInterval(() => {{
+        if (isEditingForm()) {{
+          if (refreshStatus) {{
+            refreshStatus.textContent = "Auto-refresh paused while editing form fields.";
+          }}
+          return;
+        }}
+        if (refreshStatus) {{
+          refreshStatus.textContent = "Refreshing...";
+        }}
+        refreshPageNow();
+      }}, AUTO_REFRESH_MS);
     </script>
   </main>
 </body>
