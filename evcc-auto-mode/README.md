@@ -14,6 +14,15 @@ Beim Oeffnen des Add-ons in Home Assistant steht eine Ingress-Weboberflaeche zur
 
 Zusatzlich gibt es einen JSON-Endpunkt unter `/api/state`.
 
+Direkt in der Ingress-Oberflaeche koennen ausserdem die Laufzeitwerte angepasst und gespeichert werden:
+
+- MQTT Host, Port, Benutzername und Passwort
+- Topic-Prefix
+- Loadpoint-ID
+- Export- und Import-Delays
+- Schwelle fuer `offeredCurrent`
+- Verhalten fuer Reset bei Neustart
+
 ## Verhalten in v1
 
 - Schaltet auf `minpv`, wenn:
