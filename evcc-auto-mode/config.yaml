@@ -1,9 +1,10 @@
 name: evcc Auto Mode
-version: "0.2.0"
+version: "0.2.1"
 slug: evcc_auto_mode
 description: Automatically switch evcc between pv and minpv via MQTT.
 url: "https://github.com/BigT1993-dot/ha-addon/tree/main/evcc-auto-mode"
-webui: "http://[HOST]:[PORT:8099]"
+ingress: true
+ingress_port: 8099
 panel_icon: mdi:car-electric
 panel_title: evcc Auto Mode
 arch:
@@ -15,8 +16,6 @@ arch:
 init: false
 startup: services
 boot: auto
-ports:
-  8099/tcp: 8099
 options:
   mqtt_host: core-mosquitto
   mqtt_port: 1883

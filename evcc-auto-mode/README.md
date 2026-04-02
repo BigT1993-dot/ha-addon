@@ -4,7 +4,7 @@ Dieses Home-Assistant-Add-on verbindet sich per MQTT mit `evcc` und schaltet den
 
 ## Debug-Ansicht im Add-on
 
-Beim Oeffnen des Add-ons in Home Assistant steht eine Weboberflaeche zur Verfuegung. Dort werden unter anderem angezeigt:
+Beim Oeffnen des Add-ons in Home Assistant steht eine Ingress-Weboberflaeche zur Verfuegung. Dort werden unter anderem angezeigt:
 
 - alle verwendeten MQTT-Topics
 - die letzten empfangenen Payloads je Topic
