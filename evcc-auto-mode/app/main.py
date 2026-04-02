@@ -1151,21 +1151,32 @@ def render_history_table(history: list[dict[str, Any]]) -> str:
     if not history:
         return '<div class="muted">No history recorded yet.</div>'
 
-    rows = []
-    for entry in history[:25]:
-        details_json = json.dumps(entry.get("details", {}), ensure_ascii=True, indent=2)
-        rows.append(
-            "<tr>"
-            f"<td class=\"muted\">{escape_html(format_history_timestamp(str(entry.get('timestamp', 'n/a'))))}</td>"
-            f"<td><strong>{escape_html(str(entry.get('message', 'n/a')))}</strong><br><span class=\"muted\">{escape_html(str(entry.get('type', 'n/a')))}</span></td>"
-            f"<td>{escape_html(str(entry.get('reason', 'n/a')))}</td>"
-            f"<td><details><summary>Show</summary><pre><code>{escape_html(details_json)}</code></pre></details></td>"
-            "</tr>"
-        )
+    def render_rows(entries: list[dict[str, Any]]) -> str:
+        rows = []
+        for entry in entries:
+            details_json = json.dumps(entry.get("details", {}), ensure_ascii=True, indent=2)
+            rows.append(
+                "<tr>"
+                f"<td class=\"muted\">{escape_html(format_history_timestamp(str(entry.get('timestamp', 'n/a'))))}</td>"
+                f"<td><strong>{escape_html(str(entry.get('message', 'n/a')))}</strong><br><span class=\"muted\">{escape_html(str(entry.get('type', 'n/a')))}</span></td>"
+                f"<td>{escape_html(str(entry.get('reason', 'n/a')))}</td>"
+                f"<td><details><summary>Show</summary><pre><code>{escape_html(details_json)}</code></pre></details></td>"
+                "</tr>"
+            )
+        return "".join(rows)
+
+    visible_entries = history[:10]
+    older_entries = history[10:25]
+    table_head = "<table><thead><tr><th>Time</th><th>Event</th><th>Reason</th><th>Details</th></tr></thead><tbody>"
+    visible_table = table_head + render_rows(visible_entries) + "</tbody></table>"
+
+    if not older_entries:
+        return visible_table
+
+    older_table = table_head + render_rows(older_entries) + "</tbody></table>"
     return (
-        "<table><thead><tr><th>Time</th><th>Event</th><th>Reason</th><th>Details</th></tr></thead><tbody>"
-        + "".join(rows)
-        + "</tbody></table>"
+        visible_table
+        + f'<details style="margin-top: 12px;"><summary>Show older entries ({len(older_entries)})</summary>{older_table}</details>'
     )
 
 
