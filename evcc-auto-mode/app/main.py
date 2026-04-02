@@ -669,6 +669,14 @@ def iso_utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def format_history_timestamp(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    return parsed.strftime("%d/%m %H:%M:%S")
+
+
 def render_debug_html(snapshot: dict[str, Any]) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -1010,12 +1018,13 @@ def render_history_table(history: list[dict[str, Any]]) -> str:
 
     rows = []
     for entry in history[:25]:
+        details_json = json.dumps(entry.get("details", {}), ensure_ascii=True, indent=2)
         rows.append(
             "<tr>"
-            f"<td class=\"muted\">{escape_html(str(entry.get('timestamp', 'n/a')))}</td>"
+            f"<td class=\"muted\">{escape_html(format_history_timestamp(str(entry.get('timestamp', 'n/a'))))}</td>"
             f"<td><strong>{escape_html(str(entry.get('message', 'n/a')))}</strong><br><span class=\"muted\">{escape_html(str(entry.get('type', 'n/a')))}</span></td>"
             f"<td>{escape_html(str(entry.get('reason', 'n/a')))}</td>"
-            f"<td><code>{escape_html(json.dumps(entry.get('details', {}), ensure_ascii=True))}</code></td>"
+            f"<td><details><summary>Show</summary><pre><code>{escape_html(details_json)}</code></pre></details></td>"
             "</tr>"
         )
     return (
