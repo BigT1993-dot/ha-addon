@@ -29,7 +29,7 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
-Neu in `0.2.14`:
+Neu in `0.2.15`:
 
 - grosse `STOP Automation`-Schaltflaeche in der Ingress-Oberflaeche
 - persistente Historie fuer Moduswechsel, Konfigurationsaenderungen und Start/Stop der Automatik
@@ -46,14 +46,20 @@ Neu in `0.2.14`:
 - optionaler Home-Assistant-Leistungssensor als Quelle fuer `grid_power`, in der UI auf Sensoren mit Einheit `W` gefiltert
 - bei Nutzung des Home-Assistant-Leistungssensors wieder zeitbasierte Schaltlogik mit Export-/Import-Delay
 - Home-Assistant-Leistungssensor kann jetzt auch manuell per Entity-ID eingetragen werden, falls die Vorschlagsliste leer bleibt
+- Aktionssensor nutzt jetzt feste Zustandswerte wie `switched_to_minpv` statt Zeitstempel im State
 
 ## Home Assistant Sensor
 
 Das Add-on veroeffentlicht per MQTT Discovery einen Sensor fuer die letzte automatische Aktion:
 
 - Entity-Name: `evcc Auto Mode Last Action`
-- State: ISO-Zeitstempel der letzten automatischen Modus-Aktion
+- State:
+  - `switched_to_minpv`
+  - `switched_to_pv`
+  - `failed_to_switch_minpv`
+  - `failed_to_switch_pv`
 - Attribute:
+  - `timestamp`
   - `message`
   - `reason`
   - `type`

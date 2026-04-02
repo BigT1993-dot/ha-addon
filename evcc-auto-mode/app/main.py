@@ -577,7 +577,9 @@ class EvccAutoMode:
         self.publish_action_sensor(latest_action)
 
     def publish_action_sensor(self, event: dict[str, Any]) -> None:
+        action_state = describe_action_state(event)
         attributes = {
+            "timestamp": event.get("timestamp"),
             "message": event.get("message"),
             "reason": event.get("reason"),
             "type": event.get("type"),
@@ -585,7 +587,7 @@ class EvccAutoMode:
         }
         self.client.publish(
             self.config.ha_state_topic,
-            payload=str(event.get("timestamp", "")),
+            payload=action_state,
             qos=1,
             retain=True,
         )
@@ -938,6 +940,28 @@ def format_history_timestamp(value: str) -> str:
     except ValueError:
         return value
     return parsed.strftime("%d/%m %H:%M:%S")
+
+
+def describe_action_state(event: dict[str, Any]) -> str:
+    event_type = str(event.get("type") or "")
+    details = event.get("details", {})
+    mode = str(details.get("mode") or "")
+
+    if event_type == "mode_command":
+        if mode == "minpv":
+            return "switched_to_minpv"
+        if mode == "pv":
+            return "switched_to_pv"
+        return "mode_command"
+
+    if event_type == "mode_command_failed":
+        if mode == "minpv":
+            return "failed_to_switch_minpv"
+        if mode == "pv":
+            return "failed_to_switch_pv"
+        return "mode_command_failed"
+
+    return event_type or "unknown"
 
 
 def render_debug_html(snapshot: dict[str, Any]) -> str:
