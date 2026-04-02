@@ -29,7 +29,7 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
-Neu in `0.2.13`:
+Neu in `0.2.14`:
 
 - grosse `STOP Automation`-Schaltflaeche in der Ingress-Oberflaeche
 - persistente Historie fuer Moduswechsel, Konfigurationsaenderungen und Start/Stop der Automatik
@@ -45,6 +45,7 @@ Neu in `0.2.13`:
 - eigener MQTT-Discovery-Sensor fuer den Automatik-Zustand mit State `started` oder `stopped`
 - optionaler Home-Assistant-Leistungssensor als Quelle fuer `grid_power`, in der UI auf Sensoren mit Einheit `W` gefiltert
 - bei Nutzung des Home-Assistant-Leistungssensors wieder zeitbasierte Schaltlogik mit Export-/Import-Delay
+- Home-Assistant-Leistungssensor kann jetzt auch manuell per Entity-ID eingetragen werden, falls die Vorschlagsliste leer bleibt
 
 ## Home Assistant Sensor
 
@@ -117,4 +118,4 @@ evcc_active_current_threshold: 6.0
 auto_reset_on_restart: true
 ```
 
-Wenn `homeassistant_power_sensor_entity_id` gesetzt ist, verwendet das Add-on diesen Home-Assistant-Sensor als Quelle fuer `grid_power`. In der Ingress-UI werden dafuer nur Sensoren mit Einheit `W` angeboten. Bleibt das Feld leer, nutzt das Add-on weiter `evcc/site/grid/power` per MQTT.
+Wenn `homeassistant_power_sensor_entity_id` gesetzt ist, verwendet das Add-on diesen Home-Assistant-Sensor als Quelle fuer `grid_power`. In der Ingress-UI werden dafuer Sensoren mit Einheit `W` vorgeschlagen. Falls die Vorschlagsliste leer bleibt, kann die Entity-ID auch direkt manuell eingetragen werden. Bleibt das Feld leer, nutzt das Add-on weiter `evcc/site/grid/power` per MQTT.

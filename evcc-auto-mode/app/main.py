@@ -234,6 +234,7 @@ class EvccAutoMode:
         self.supervisor_token = os.getenv("SUPERVISOR_TOKEN", "")
         self.homeassistant_power_sensor_cache: list[dict[str, str]] = []
         self.homeassistant_power_sensor_cache_at: float | None = None
+        self.homeassistant_power_sensor_error: str | None = None
         self.last_power_sensor_poll_at: float | None = None
 
         self._restore_runtime_state()
@@ -440,8 +441,9 @@ class EvccAutoMode:
 
         try:
             states = self.homeassistant_api_get("/states")
-        except Exception:
+        except Exception as err:
             LOGGER.exception("Failed to list Home Assistant power sensors")
+            self.homeassistant_power_sensor_error = str(err)
             return self.homeassistant_power_sensor_cache
 
         sensors: list[dict[str, str]] = []
@@ -461,6 +463,7 @@ class EvccAutoMode:
         sensors.sort(key=lambda item: item["name"].lower())
         self.homeassistant_power_sensor_cache = sensors
         self.homeassistant_power_sensor_cache_at = now
+        self.homeassistant_power_sensor_error = None
         return sensors
 
     def homeassistant_api_get(self, path: str) -> Any:
@@ -700,6 +703,7 @@ class EvccAutoMode:
                     **config_to_dict(self.config),
                     "mqtt_password": mask_secret(self.config.mqtt_password),
                     "power_sensor_options": self.list_homeassistant_power_sensors(),
+                    "power_sensor_error": self.homeassistant_power_sensor_error,
                 },
                 "topics": self.config.topics,
                 "state": {
@@ -763,6 +767,7 @@ class EvccAutoMode:
             self.battery_soc = None
             self.auto_mode_active = False
             self.homeassistant_power_sensor_cache_at = None
+            self.homeassistant_power_sensor_error = None
             self.last_power_sensor_poll_at = None
 
         write_runtime_config(next_config)
@@ -1267,9 +1272,16 @@ def render_topics_table(topics: dict[str, str], topic_values: dict[str, dict[str
 
 def render_config_form(config: dict[str, Any]) -> str:
     auto_reset_checked = "true" if config["auto_reset_on_restart"] else "false"
+    selected_sensor = str(config.get("homeassistant_power_sensor_entity_id", ""))
     sensor_options = render_power_sensor_options(
-        config.get("homeassistant_power_sensor_entity_id", ""),
+        selected_sensor,
         config.get("power_sensor_options", []),
+    )
+    power_sensor_error = str(config.get("power_sensor_error") or "")
+    power_sensor_status = (
+        f'<div class="status warn">Sensor list unavailable: {escape_html(power_sensor_error)}</div>'
+        if power_sensor_error
+        else '<div class="status">Only Home Assistant sensors with unit `W` are suggested here. Manual entry is allowed.</div>'
     )
     return f"""
 <form id="config-form">
@@ -1281,9 +1293,7 @@ def render_config_form(config: dict[str, Any]) -> str:
     <label>MQTT Prefix<input name="mqtt_topic_prefix" value="{escape_html(str(config["mqtt_topic_prefix"]))}" required></label>
     <label>Loadpoint ID<input name="loadpoint_id" type="number" min="1" value="{escape_html(str(config["loadpoint_id"]))}" required></label>
     <label>Home Assistant Power Sensor
-      <select name="homeassistant_power_sensor_entity_id">
-        {sensor_options}
-      </select>
+      <input name="homeassistant_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_sensor)}" placeholder="sensor.power_meter_wirkleistung">
     </label>
     <label>Export Threshold (W)<input name="export_power_threshold_w" type="number" step="1" value="{escape_html(str(config["export_power_threshold_w"]))}" required></label>
     <label>Import Threshold (W)<input name="import_power_threshold_w" type="number" step="1" value="{escape_html(str(config["import_power_threshold_w"]))}" required></label>
@@ -1298,24 +1308,27 @@ def render_config_form(config: dict[str, Any]) -> str:
     <option value="true"></option>
     <option value="false"></option>
   </datalist>
+  <datalist id="power-sensor-options">
+    {sensor_options}
+  </datalist>
   <div class="actions">
     <button type="submit">Save Config</button>
     <div class="status" id="save-status">Password stays unchanged if left empty. Leave the sensor empty to keep using evcc MQTT grid power.</div>
   </div>
+  {power_sensor_status}
 </form>
 """
 
 
 def render_power_sensor_options(selected_entity_id: str, options: list[dict[str, str]]) -> str:
-    rows = [
-        '<option value="">Use evcc MQTT grid power</option>',
-    ]
+    rows = []
+    if selected_entity_id:
+        rows.append(f'<option value="{escape_html(selected_entity_id)}"></option>')
     for option in options:
         entity_id = option["entity_id"]
-        selected = ' selected' if entity_id == selected_entity_id else ""
         label = f'{option["name"]} ({entity_id})'
         rows.append(
-            f'<option value="{escape_html(entity_id)}"{selected}>{escape_html(label)}</option>'
+            f'<option value="{escape_html(entity_id)}">{escape_html(label)}</option>'
         )
     return "".join(rows)
 
