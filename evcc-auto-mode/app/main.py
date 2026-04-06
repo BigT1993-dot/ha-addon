@@ -235,6 +235,8 @@ class EvccAutoMode:
         self.homeassistant_power_sensor_cache_at: float | None = None
         self.homeassistant_power_sensor_error: str | None = None
         self.last_power_sensor_poll_at: float | None = None
+        self.simulation_enabled = False
+        self.last_mode_command_simulated = False
 
         self._restore_runtime_state()
 
@@ -292,18 +294,19 @@ class EvccAutoMode:
                 elif msg.topic == topics["plan_active"]:
                     self.plan_active = parse_bool(payload)
                 elif msg.topic == topics["mode"]:
-                    previous_mode = self.current_mode
-                    self.current_mode = payload
-                    if payload != previous_mode:
-                        self.record_event(
-                            "mode_observed",
-                            f"Observed evcc mode {payload}",
-                            reason="mode topic updated",
-                            details={"previous_mode": previous_mode or None, "current_mode": payload},
-                        )
-                    if payload != "minpv" and self.auto_mode_active:
-                        LOGGER.info("Mode changed externally to %s; clearing auto flag", payload)
-                        self.set_auto_mode_active(False, reason=f"evcc mode changed externally to {payload}", source="mqtt")
+                    if not self.simulation_enabled:
+                        previous_mode = self.current_mode
+                        self.current_mode = payload
+                        if payload != previous_mode:
+                            self.record_event(
+                                "mode_observed",
+                                f"Observed evcc mode {payload}",
+                                reason="mode topic updated",
+                                details={"previous_mode": previous_mode or None, "current_mode": payload},
+                            )
+                        if payload != "minpv" and self.auto_mode_active:
+                            LOGGER.info("Mode changed externally to %s; clearing auto flag", payload)
+                            self.set_auto_mode_active(False, reason=f"evcc mode changed externally to {payload}", source="mqtt")
                 elif msg.topic == topics["offered_current"]:
                     self.offered_current = parse_float(payload)
                 elif msg.topic == topics["grid_power"]:
@@ -486,6 +489,17 @@ class EvccAutoMode:
         LOGGER.info("Publishing %s to %s", mode, topic)
         self.last_mode_command = mode
         self.last_mode_command_at = time.monotonic()
+        self.last_mode_command_simulated = self.simulation_enabled
+        if self.simulation_enabled:
+            self.current_mode = mode
+            self.record_event(
+                "mode_command_simulated",
+                f"Would publish mode {mode}",
+                reason=reason,
+                details={"topic": topic, "mode": mode, "source": source, "simulated": True},
+            )
+            self.persist_runtime_state()
+            return
         result = self.client.publish(topic, payload=mode, qos=1, retain=False)
         event_details = {
             "topic": topic,
@@ -527,6 +541,7 @@ class EvccAutoMode:
         state = read_runtime_state()
         self.history = list(state.get("history", []))
         self.automation_enabled = parse_config_bool(state.get("automation_enabled", True))
+        self.simulation_enabled = parse_config_bool(state.get("simulation_enabled", False))
         if self.config.auto_reset_on_restart:
             self.auto_mode_active = False
             self.persist_runtime_state()
@@ -539,6 +554,7 @@ class EvccAutoMode:
             {
                 "auto_mode_active": self.auto_mode_active,
                 "automation_enabled": self.automation_enabled,
+                "simulation_enabled": self.simulation_enabled,
                 "history": self.history,
                 "updated_at": iso_utc_now(),
             }
@@ -610,6 +626,7 @@ class EvccAutoMode:
                 "topics": self.config.topics,
                 "state": {
                     "mqtt_connected": self.mqtt_connected,
+                    "simulation_enabled": self.simulation_enabled,
                     "connected": self.connected,
                     "plan_active": self.plan_active,
                     "current_mode": self.current_mode,
@@ -623,6 +640,7 @@ class EvccAutoMode:
                     "last_decision_reason": self.last_decision_reason,
                     "last_restore_reason": self.last_restore_reason,
                     "last_mode_command": self.last_mode_command,
+                    "last_mode_command_simulated": self.last_mode_command_simulated,
                     "last_mqtt_message_age_seconds": elapsed_seconds(self.last_mqtt_message_at, now),
                     "grid_power_age_seconds": elapsed_seconds(self.grid_power_updated_at, now),
                     "last_mode_command_age_seconds": elapsed_seconds(self.last_mode_command_at, now),
@@ -692,6 +710,29 @@ class EvccAutoMode:
         self.set_automation_enabled(enabled, reason=reason, source="ui")
         return self.get_debug_snapshot()
 
+    def update_simulation(self, payload: dict[str, Any]) -> dict[str, Any]:
+        enabled = parse_config_bool(payload["enabled"])
+        reason = str(payload.get("reason") or "user pressed simulation control").strip()
+        with self.state_lock:
+            if self.simulation_enabled == enabled:
+                return self.get_debug_snapshot()
+
+            self.simulation_enabled = enabled
+            self.last_mode_command_simulated = False
+            self.auto_mode_active = False
+            self.last_decision_reason = "simulation enabled" if enabled else "simulation disabled"
+            self.last_restore_reason = "simulation enabled" if enabled else "simulation disabled"
+            self.record_event(
+                "simulation_toggle",
+                f"simulation_enabled set to {format_value(enabled)}",
+                reason=reason,
+                details={"source": "ui", "simulation_enabled": enabled},
+            )
+            self.persist_runtime_state()
+
+        self.evaluate()
+        return self.get_debug_snapshot()
+
     def reconnect_mqtt(self) -> None:
         LOGGER.info("Reconnecting MQTT client to apply updated configuration")
         self.client.loop_stop()
@@ -740,7 +781,7 @@ class DebugServer:
                 self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
             def do_POST(self) -> None:
-                if self.path not in {"/api/config", "/api/automation"}:
+                if self.path not in {"/api/config", "/api/automation", "/api/simulation"}:
                     self.send_error(HTTPStatus.NOT_FOUND, "Not found")
                     return
 
@@ -750,6 +791,8 @@ class DebugServer:
                     payload = json.loads(raw.decode("utf-8"))
                     if self.path == "/api/config":
                         snapshot = worker.update_config(payload)
+                    elif self.path == "/api/simulation":
+                        snapshot = worker.update_simulation(payload)
                     else:
                         snapshot = worker.update_automation(payload)
                 except (json.JSONDecodeError, ValueError, KeyError) as err:
@@ -1038,6 +1081,12 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
         {render_config_form(snapshot["config"])}
       </section>
       <section class="card">
+        <h2>Simulation</h2>
+        {render_simulation_controls(snapshot["state"])}
+      </section>
+    </div>
+    <div class="grid" style="margin-top: 16px;">
+      <section class="card">
         <h2>History</h2>
         {render_history_table(snapshot["history"])}
       </section>
@@ -1046,6 +1095,9 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       const form = document.getElementById("config-form");
       const status = document.getElementById("save-status");
       const automationStatus = document.getElementById("automation-status");
+      const simulationStatus = document.getElementById("simulation-status");
+      const simulationEnableButton = document.getElementById("simulation-enable");
+      const simulationDisableButton = document.getElementById("simulation-disable");
       const stopButton = document.getElementById("automation-stop");
       const startButton = document.getElementById("automation-start");
       const refreshButton = document.getElementById("page-refresh");
@@ -1135,11 +1187,46 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
           automationStatus.textContent = `Save failed: ${{error.message}}`;
         }}
       }}
+      async function toggleSimulation(enabled, reason) {{
+        if (!simulationStatus) {{
+          return;
+        }}
+        simulationStatus.textContent = enabled ? "Enabling what-if mode..." : "Disabling what-if mode...";
+        try {{
+          const response = await fetch("api/simulation", {{
+            method: "POST",
+            headers: {{ "Content-Type": "application/json" }},
+            body: JSON.stringify({{ enabled, reason }}),
+          }});
+          const raw = await response.text();
+          let data = {{}};
+          if (raw) {{
+            try {{
+              data = JSON.parse(raw);
+            }} catch (_error) {{
+              throw new Error(raw);
+            }}
+          }}
+          if (!response.ok) {{
+            throw new Error(data.error || "Simulation update failed");
+          }}
+          simulationStatus.textContent = "Saved. Reloading state...";
+          window.location.reload();
+        }} catch (error) {{
+          simulationStatus.textContent = `Save failed: ${{error.message}}`;
+        }}
+      }}
       if (stopButton) {{
         stopButton.addEventListener("click", () => toggleAutomation(false, "user pressed STOP automation"));
       }}
       if (startButton) {{
         startButton.addEventListener("click", () => toggleAutomation(true, "user pressed START automation"));
+      }}
+      if (simulationEnableButton) {{
+        simulationEnableButton.addEventListener("click", () => toggleSimulation(true, "user enabled what-if simulation"));
+      }}
+      if (simulationDisableButton) {{
+        simulationDisableButton.addEventListener("click", () => toggleSimulation(false, "user disabled what-if simulation"));
       }}
       if (refreshButton) {{
         refreshButton.addEventListener("click", refreshPageNow);
@@ -1265,6 +1352,26 @@ def render_automation_controls(state: dict[str, Any]) -> str:
   <button type="button" class="button-danger" id="automation-stop">STOP Automation</button>
   <button type="button" class="button-secondary" id="automation-start">Start Automation</button>
   <div class="status" id="automation-status">Stop clears the add-on's automation ownership and prevents further MQTT writes until restarted.</div>
+</div>
+"""
+
+
+def render_simulation_controls(state: dict[str, Any]) -> str:
+    enabled = bool(state["simulation_enabled"])
+    simulation_text = "what-if active" if enabled else "live writes active"
+    last_command = "none"
+    if state.get("last_mode_command"):
+        suffix = " (simulated)" if state.get("last_mode_command_simulated") else ""
+        last_command = f'{state["last_mode_command"]}{suffix}'
+    return f"""
+<div class="label">Write Mode</div>
+<div class="value">{escape_html(simulation_text)}</div>
+<div class="label" style="margin-top: 12px;">Last Command</div>
+<div class="value">{escape_html(last_command)}</div>
+<div class="actions">
+  <button type="button" class="button-secondary" id="simulation-enable">Enable What-If</button>
+  <button type="button" class="button-danger" id="simulation-disable">Disable What-If</button>
+  <div class="status" id="simulation-status">What-if uses the real incoming values and shows what the add-on would write, but suppresses the actual MQTT mode command.</div>
 </div>
 """
 

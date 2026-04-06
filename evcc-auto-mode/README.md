@@ -29,6 +29,13 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
+Neu in `0.2.18`:
+
+- `What-If`-Simulationsmodus in der Ingress-Oberflaeche
+- nutzt weiter die real eingehenden MQTT- und Home-Assistant-Werte
+- zeigt in Status und History, welchen Modus das Add-on schreiben wuerde
+- unterdrueckt dabei den echten MQTT-Schreibzugriff auf `.../mode/set`
+
 Neu in `0.2.17`:
 
 - grosse `STOP Automation`-Schaltflaeche in der Ingress-Oberflaeche
