@@ -43,10 +43,13 @@ class AddonConfig:
     mqtt_topic_prefix: str
     loadpoint_id: int
     homeassistant_power_sensor_entity_id: str
+    homeassistant_battery_power_sensor_entity_id: str
     export_power_threshold_w: float
     import_power_threshold_w: float
     export_delay_seconds: int
     import_delay_seconds: int
+    battery_discharge_power_threshold_w: float
+    battery_discharge_delay_seconds: int
     evcc_active_current_threshold: float
     auto_reset_on_restart: bool
 
@@ -58,6 +61,7 @@ class AddonConfig:
     def topics(self) -> dict[str, str]:
         return {
             "grid_power": f"{self.mqtt_topic_prefix}/site/grid/power",
+            "battery_power": f"{self.mqtt_topic_prefix}/site/batteryPower",
             "buffer_soc": f"{self.mqtt_topic_prefix}/site/bufferSoc",
             "battery_soc": f"{self.mqtt_topic_prefix}/site/batterySoc",
             "connected": f"{self.loadpoint_prefix}/connected",
@@ -122,10 +126,15 @@ def read_config() -> AddonConfig:
         mqtt_topic_prefix=(raw.get("mqtt_topic_prefix") or "evcc").rstrip("/"),
         loadpoint_id=int(raw.get("loadpoint_id", 1)),
         homeassistant_power_sensor_entity_id=str(raw.get("homeassistant_power_sensor_entity_id", "") or "").strip(),
+        homeassistant_battery_power_sensor_entity_id=str(
+            raw.get("homeassistant_battery_power_sensor_entity_id", "") or ""
+        ).strip(),
         export_power_threshold_w=float(raw.get("export_power_threshold_w", -100.0)),
         import_power_threshold_w=float(raw.get("import_power_threshold_w", 100.0)),
         export_delay_seconds=int(raw.get("export_delay_seconds", 60)),
         import_delay_seconds=int(raw.get("import_delay_seconds", 30)),
+        battery_discharge_power_threshold_w=float(raw.get("battery_discharge_power_threshold_w", 200.0)),
+        battery_discharge_delay_seconds=int(raw.get("battery_discharge_delay_seconds", 60)),
         evcc_active_current_threshold=float(raw.get("evcc_active_current_threshold", 6.0)),
         auto_reset_on_restart=parse_config_bool(raw.get("auto_reset_on_restart", True)),
     )
@@ -168,10 +177,13 @@ def config_to_dict(config: AddonConfig) -> dict[str, Any]:
         "mqtt_topic_prefix": config.mqtt_topic_prefix,
         "loadpoint_id": config.loadpoint_id,
         "homeassistant_power_sensor_entity_id": config.homeassistant_power_sensor_entity_id,
+        "homeassistant_battery_power_sensor_entity_id": config.homeassistant_battery_power_sensor_entity_id,
         "export_power_threshold_w": config.export_power_threshold_w,
         "import_power_threshold_w": config.import_power_threshold_w,
         "export_delay_seconds": config.export_delay_seconds,
         "import_delay_seconds": config.import_delay_seconds,
+        "battery_discharge_power_threshold_w": config.battery_discharge_power_threshold_w,
+        "battery_discharge_delay_seconds": config.battery_discharge_delay_seconds,
         "evcc_active_current_threshold": config.evcc_active_current_threshold,
         "auto_reset_on_restart": config.auto_reset_on_restart,
     }
@@ -186,10 +198,15 @@ def config_from_payload(payload: dict[str, Any]) -> AddonConfig:
         mqtt_topic_prefix=str(payload.get("mqtt_topic_prefix", "evcc") or "evcc").rstrip("/"),
         loadpoint_id=int(payload.get("loadpoint_id", 1)),
         homeassistant_power_sensor_entity_id=str(payload.get("homeassistant_power_sensor_entity_id", "") or "").strip(),
+        homeassistant_battery_power_sensor_entity_id=str(
+            payload.get("homeassistant_battery_power_sensor_entity_id", "") or ""
+        ).strip(),
         export_power_threshold_w=float(payload.get("export_power_threshold_w", -100.0)),
         import_power_threshold_w=float(payload.get("import_power_threshold_w", 100.0)),
         export_delay_seconds=int(payload.get("export_delay_seconds", 60)),
         import_delay_seconds=int(payload.get("import_delay_seconds", 30)),
+        battery_discharge_power_threshold_w=float(payload.get("battery_discharge_power_threshold_w", 200.0)),
+        battery_discharge_delay_seconds=int(payload.get("battery_discharge_delay_seconds", 60)),
         evcc_active_current_threshold=float(payload.get("evcc_active_current_threshold", 6.0)),
         auto_reset_on_restart=parse_config_bool(payload.get("auto_reset_on_restart", True)),
     )
@@ -216,12 +233,18 @@ class EvccAutoMode:
         self.grid_power = 0.0
         self.grid_power_source = "mqtt"
         self.grid_power_updated_at: float | None = None
+        self.battery_power: float | None = None
+        self.battery_power_source = "mqtt"
+        self.battery_power_updated_at: float | None = None
+        self.mqtt_battery_power: float | None = None
+        self.mqtt_battery_power_updated_at: float | None = None
         self.buffer_soc: float | None = None
         self.battery_soc: float | None = None
         self.auto_mode_active = False
         self.automation_enabled = True
         self.export_timer_started_at: float | None = None
         self.import_timer_started_at: float | None = None
+        self.battery_discharge_timer_started_at: float | None = None
         self.last_mqtt_message_at: float | None = None
         self.last_mode_command: str | None = None
         self.last_mode_command_at: float | None = None
@@ -234,7 +257,9 @@ class EvccAutoMode:
         self.homeassistant_power_sensor_cache: list[dict[str, str]] = []
         self.homeassistant_power_sensor_cache_at: float | None = None
         self.homeassistant_power_sensor_error: str | None = None
+        self.homeassistant_battery_power_sensor_error: str | None = None
         self.last_power_sensor_poll_at: float | None = None
+        self.last_battery_power_sensor_poll_at: float | None = None
         self.simulation_enabled = False
         self.last_mode_command_simulated = False
 
@@ -250,6 +275,7 @@ class EvccAutoMode:
         try:
             while not self.shutdown_event.wait(1):
                 self.refresh_grid_power_source()
+                self.refresh_battery_power_source()
                 self.evaluate()
         finally:
             server.stop()
@@ -312,6 +338,12 @@ class EvccAutoMode:
                 elif msg.topic == topics["grid_power"]:
                     if not self.config.homeassistant_power_sensor_entity_id:
                         self.update_grid_power(parse_float(payload), source="mqtt")
+                elif msg.topic == topics["battery_power"]:
+                    value = parse_float(payload)
+                    self.mqtt_battery_power = value
+                    self.mqtt_battery_power_updated_at = time.monotonic()
+                    if not self.config.homeassistant_battery_power_sensor_entity_id:
+                        self.update_battery_power(value, source="mqtt")
                 elif msg.topic == topics["buffer_soc"]:
                     self.buffer_soc = parse_optional_float(payload)
                 elif msg.topic == topics["battery_soc"]:
@@ -335,6 +367,11 @@ class EvccAutoMode:
                 self.import_timer_started_at = self.import_timer_started_at or now
             else:
                 self.import_timer_started_at = None
+
+            if self.is_battery_discharge_above_threshold():
+                self.battery_discharge_timer_started_at = self.battery_discharge_timer_started_at or now
+            else:
+                self.battery_discharge_timer_started_at = None
 
             if not self.connected and self.auto_mode_active:
                 LOGGER.info("Vehicle disconnected; clearing auto mode state")
@@ -393,22 +430,67 @@ class EvccAutoMode:
     def should_restore_pv(self, now: float) -> tuple[bool, str]:
         if not self.auto_mode_active:
             return False, "auto mode not active"
-        if self.grid_power_updated_at is None:
-            return False, "grid power source has not delivered data yet"
-        if now - self.grid_power_updated_at > POWER_SENSOR_POLL_INTERVAL_SECONDS * 3:
-            return False, "grid power data is stale"
-        if self.import_timer_started_at is None:
-            return False, f"no sustained grid import detected at or above {format_threshold(self.config.import_power_threshold_w)} W"
-        if now - self.import_timer_started_at < self.config.import_delay_seconds:
-            return False, "import delay not reached yet"
         if self.current_mode == "pv":
             return False, "evcc already in pv"
-        return True, "all restore conditions met"
+
+        import_ready = self.is_grid_power_fresh(now) and self.import_timer_started_at is not None
+        if import_ready and now - self.import_timer_started_at >= self.config.import_delay_seconds:
+            return True, "sustained grid import threshold reached"
+
+        battery_ready = self.is_battery_power_fresh(now) and self.battery_discharge_timer_started_at is not None
+        if battery_ready and now - self.battery_discharge_timer_started_at >= self.config.battery_discharge_delay_seconds:
+            return True, "sustained battery discharge threshold reached"
+
+        blockers: list[str] = []
+        if not self.is_grid_power_fresh(now):
+            if self.grid_power_updated_at is None:
+                blockers.append("grid power source has not delivered data yet")
+            else:
+                blockers.append("grid power data is stale")
+        elif self.import_timer_started_at is None:
+            blockers.append(
+                f"no sustained grid import detected at or above {format_threshold(self.config.import_power_threshold_w)} W"
+            )
+        else:
+            blockers.append("import delay not reached yet")
+
+        if not self.is_battery_power_fresh(now):
+            if self.battery_power_updated_at is None:
+                blockers.append("battery power source has not delivered data yet")
+            else:
+                blockers.append("battery power data is stale")
+        elif self.battery_discharge_timer_started_at is None:
+            blockers.append(
+                f"no sustained battery discharge detected at or above {format_threshold(self.config.battery_discharge_power_threshold_w)} W"
+            )
+        else:
+            blockers.append("battery discharge delay not reached yet")
+
+        return False, "; ".join(blockers)
 
     def update_grid_power(self, value: float, source: str) -> None:
         self.grid_power = value
         self.grid_power_source = source
         self.grid_power_updated_at = time.monotonic()
+
+    def update_battery_power(self, value: float, source: str, observed_at: float | None = None) -> None:
+        self.battery_power = value
+        self.battery_power_source = source
+        self.battery_power_updated_at = observed_at if observed_at is not None else time.monotonic()
+
+    def is_grid_power_fresh(self, now: float) -> bool:
+        return self.grid_power_updated_at is not None and now - self.grid_power_updated_at <= POWER_SENSOR_POLL_INTERVAL_SECONDS * 3
+
+    def is_battery_power_fresh(self, now: float) -> bool:
+        return (
+            self.battery_power_updated_at is not None
+            and now - self.battery_power_updated_at <= POWER_SENSOR_POLL_INTERVAL_SECONDS * 3
+        )
+
+    def is_battery_discharge_above_threshold(self) -> bool:
+        if self.battery_power is None:
+            return False
+        return self.battery_power >= self.config.battery_discharge_power_threshold_w
 
     def refresh_grid_power_source(self) -> None:
         entity_id = self.config.homeassistant_power_sensor_entity_id
@@ -429,6 +511,38 @@ class EvccAutoMode:
 
         with self.state_lock:
             self.update_grid_power(value, source=f"homeassistant:{entity_id}")
+
+    def refresh_battery_power_source(self) -> None:
+        entity_id = self.config.homeassistant_battery_power_sensor_entity_id
+        if not entity_id:
+            return
+
+        now = time.monotonic()
+        if (
+            self.last_battery_power_sensor_poll_at is not None
+            and now - self.last_battery_power_sensor_poll_at < POWER_SENSOR_POLL_INTERVAL_SECONDS
+        ):
+            return
+        self.last_battery_power_sensor_poll_at = now
+
+        try:
+            state = self.fetch_homeassistant_state(entity_id)
+            value = parse_float(str(state["state"]))
+        except Exception as err:
+            self.homeassistant_battery_power_sensor_error = str(err)
+            LOGGER.exception("Failed to refresh Home Assistant battery power sensor %s", entity_id)
+            with self.state_lock:
+                if self.mqtt_battery_power is not None and self.mqtt_battery_power_updated_at is not None:
+                    self.update_battery_power(
+                        self.mqtt_battery_power,
+                        source="mqtt-fallback",
+                        observed_at=self.mqtt_battery_power_updated_at,
+                    )
+            return
+
+        with self.state_lock:
+            self.homeassistant_battery_power_sensor_error = None
+            self.update_battery_power(value, source=f"homeassistant:{entity_id}")
 
     def fetch_homeassistant_state(self, entity_id: str) -> dict[str, Any]:
         return self.homeassistant_api_get(f"/states/{entity_id}")
@@ -622,6 +736,7 @@ class EvccAutoMode:
                     "mqtt_password": mask_secret(self.config.mqtt_password),
                     "power_sensor_options": self.list_homeassistant_power_sensors(),
                     "power_sensor_error": self.homeassistant_power_sensor_error,
+                    "battery_power_sensor_error": self.homeassistant_battery_power_sensor_error,
                 },
                 "topics": self.config.topics,
                 "state": {
@@ -633,6 +748,8 @@ class EvccAutoMode:
                     "offered_current": self.offered_current,
                     "grid_power": self.grid_power,
                     "grid_power_source": self.grid_power_source,
+                    "battery_power": self.battery_power,
+                    "battery_power_source": self.battery_power_source,
                     "buffer_soc": self.buffer_soc,
                     "battery_soc": self.battery_soc,
                     "automation_enabled": self.automation_enabled,
@@ -643,9 +760,11 @@ class EvccAutoMode:
                     "last_mode_command_simulated": self.last_mode_command_simulated,
                     "last_mqtt_message_age_seconds": elapsed_seconds(self.last_mqtt_message_at, now),
                     "grid_power_age_seconds": elapsed_seconds(self.grid_power_updated_at, now),
+                    "battery_power_age_seconds": elapsed_seconds(self.battery_power_updated_at, now),
                     "last_mode_command_age_seconds": elapsed_seconds(self.last_mode_command_at, now),
                     "export_timer_age_seconds": elapsed_seconds(self.export_timer_started_at, now),
                     "import_timer_age_seconds": elapsed_seconds(self.import_timer_started_at, now),
+                    "battery_discharge_timer_age_seconds": elapsed_seconds(self.battery_discharge_timer_started_at, now),
                 },
                 "topic_values": self.topic_values,
                 "history": self.history,
@@ -676,10 +795,16 @@ class EvccAutoMode:
             self.last_mqtt_message_at = None
             self.export_timer_started_at = None
             self.import_timer_started_at = None
+            self.battery_discharge_timer_started_at = None
             self.current_mode = ""
             self.grid_power = 0.0
             self.grid_power_source = "mqtt"
             self.grid_power_updated_at = None
+            self.battery_power = None
+            self.battery_power_source = "mqtt"
+            self.battery_power_updated_at = None
+            self.mqtt_battery_power = None
+            self.mqtt_battery_power_updated_at = None
             self.offered_current = 0.0
             self.connected = False
             self.plan_active = False
@@ -688,7 +813,9 @@ class EvccAutoMode:
             self.auto_mode_active = False
             self.homeassistant_power_sensor_cache_at = None
             self.homeassistant_power_sensor_error = None
+            self.homeassistant_battery_power_sensor_error = None
             self.last_power_sensor_poll_at = None
+            self.last_battery_power_sensor_poll_at = None
 
         write_runtime_config(next_config)
         self.record_event(
@@ -1126,10 +1253,13 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
             mqtt_topic_prefix: formData.get("mqtt_topic_prefix"),
             loadpoint_id: Number(formData.get("loadpoint_id")),
             homeassistant_power_sensor_entity_id: formData.get("homeassistant_power_sensor_entity_id"),
+            homeassistant_battery_power_sensor_entity_id: formData.get("homeassistant_battery_power_sensor_entity_id"),
             export_power_threshold_w: Number(formData.get("export_power_threshold_w")),
             import_power_threshold_w: Number(formData.get("import_power_threshold_w")),
             export_delay_seconds: Number(formData.get("export_delay_seconds")),
             import_delay_seconds: Number(formData.get("import_delay_seconds")),
+            battery_discharge_power_threshold_w: Number(formData.get("battery_discharge_power_threshold_w")),
+            battery_discharge_delay_seconds: Number(formData.get("battery_discharge_delay_seconds")),
             evcc_active_current_threshold: Number(formData.get("evcc_active_current_threshold")),
             auto_reset_on_restart: formData.get("auto_reset_on_restart") === "true",
           }};
@@ -1282,16 +1412,25 @@ def render_topics_table(topics: dict[str, str], topic_values: dict[str, dict[str
 def render_config_form(config: dict[str, Any]) -> str:
     auto_reset_checked = "true" if config["auto_reset_on_restart"] else "false"
     selected_sensor = str(config.get("homeassistant_power_sensor_entity_id", ""))
+    selected_battery_sensor = str(config.get("homeassistant_battery_power_sensor_entity_id", ""))
     sensor_options = render_power_sensor_options(
         selected_sensor,
         config.get("power_sensor_options", []),
     )
     power_sensor_error = str(config.get("power_sensor_error") or "")
-    power_sensor_status = (
-        f'<div class="status warn">Sensor list unavailable: {escape_html(power_sensor_error)}</div>'
-        if power_sensor_error
-        else '<div class="status">Only Home Assistant sensors with unit `W` are suggested here. Manual entry is allowed.</div>'
-    )
+    battery_power_sensor_error = str(config.get("battery_power_sensor_error") or "")
+    status_messages = []
+    if power_sensor_error:
+        status_messages.append(f'<div class="status warn">Grid sensor list unavailable: {escape_html(power_sensor_error)}</div>')
+    if battery_power_sensor_error:
+        status_messages.append(
+            f'<div class="status warn">Battery power sensor fallback active: {escape_html(battery_power_sensor_error)}</div>'
+        )
+    if not status_messages:
+        status_messages.append(
+            '<div class="status">Only Home Assistant sensors with unit `W` are suggested here. Manual entry is allowed.</div>'
+        )
+    sensor_status = "".join(status_messages)
     return f"""
 <form id="config-form">
   <div class="form-grid">
@@ -1304,10 +1443,15 @@ def render_config_form(config: dict[str, Any]) -> str:
     <label>Home Assistant Power Sensor
       <input name="homeassistant_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_sensor)}" placeholder="sensor.power_meter_wirkleistung">
     </label>
+    <label>Home Assistant Battery Power Sensor
+      <input name="homeassistant_battery_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_battery_sensor)}" placeholder="sensor.battery_power">
+    </label>
     <label>Export Threshold (W)<input name="export_power_threshold_w" type="number" step="1" value="{escape_html(str(config["export_power_threshold_w"]))}" required></label>
     <label>Import Threshold (W)<input name="import_power_threshold_w" type="number" step="1" value="{escape_html(str(config["import_power_threshold_w"]))}" required></label>
     <label>Export Delay (s)<input name="export_delay_seconds" type="number" min="1" value="{escape_html(str(config["export_delay_seconds"]))}" required></label>
     <label>Import Delay (s)<input name="import_delay_seconds" type="number" min="1" value="{escape_html(str(config["import_delay_seconds"]))}" required></label>
+    <label>Battery Discharge Threshold (W)<input name="battery_discharge_power_threshold_w" type="number" step="1" min="1" value="{escape_html(str(config["battery_discharge_power_threshold_w"]))}" required></label>
+    <label>Battery Discharge Delay (s)<input name="battery_discharge_delay_seconds" type="number" min="1" value="{escape_html(str(config["battery_discharge_delay_seconds"]))}" required></label>
     <label>evcc Active Threshold (A)<input name="evcc_active_current_threshold" type="number" step="0.1" min="0" value="{escape_html(str(config["evcc_active_current_threshold"]))}" required></label>
     <label>Reset Auto State On Restart
       <input name="auto_reset_on_restart" list="bool-values" value="{auto_reset_checked}" required>
@@ -1322,9 +1466,9 @@ def render_config_form(config: dict[str, Any]) -> str:
   </datalist>
   <div class="actions">
     <button type="submit">Save Config</button>
-    <div class="status" id="save-status">Password stays unchanged if left empty. Leave the sensor empty to keep using evcc MQTT grid power.</div>
+    <div class="status" id="save-status">Password stays unchanged if left empty. Leave either sensor empty to keep using evcc MQTT for that value.</div>
   </div>
-  {power_sensor_status}
+  {sensor_status}
 </form>
 """
 
@@ -1470,6 +1614,10 @@ def validate_config(config: AddonConfig) -> None:
         raise ValueError("export_delay_seconds must be >= 1")
     if config.import_delay_seconds < 1:
         raise ValueError("import_delay_seconds must be >= 1")
+    if config.battery_discharge_power_threshold_w <= 0:
+        raise ValueError("battery_discharge_power_threshold_w must be > 0")
+    if config.battery_discharge_delay_seconds < 1:
+        raise ValueError("battery_discharge_delay_seconds must be >= 1")
     if config.evcc_active_current_threshold < 0:
         raise ValueError("evcc_active_current_threshold must be >= 0")
 

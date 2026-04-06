@@ -20,14 +20,24 @@ Direkt in der Ingress-Oberflaeche koennen ausserdem die Laufzeitwerte angepasst 
 - Topic-Prefix
 - Loadpoint-ID
 - optionaler Home-Assistant-Leistungssensor fuer `grid_power`
+- optionaler Home-Assistant-Sensor fuer `battery_power`
 - Export- und Import-Leistungsschwellen in Watt
 - Export- und Import-Delays
+- Batterientlade-Schwelle und Delay fuer die Rueckschaltung auf `pv`
 - Schwelle fuer `offeredCurrent`
 - Verhalten fuer Reset bei Neustart
 
 Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die Debug-Ansicht jetzt alle aktiven Blocker gesammelt an statt nur des ersten Treffers.
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
+
+Neu in `0.2.19`:
+
+- Rueckschaltung auf `pv` jetzt auch bei dauerhaft zu hoher Batterientladung
+- optionaler Home-Assistant-Sensor fuer Batterieleistung mit Prioritaet vor `evcc/site/batteryPower`
+- `evcc/site/batteryPower` wird fuer Batterieleistung nur noch als Fallback genutzt
+- neue Runtime-Settings fuer Batterientlade-Schwelle und Batterientlade-Dauer
+- Debug-Ansicht zeigt Batterieleistung, Quelle und Entlade-Timer an
 
 Neu in `0.2.18`:
 
@@ -65,13 +75,20 @@ Wenn `STOP Automation` gedrueckt wird, schreibt das Add-on keine weiteren automa
   - `batterySoc < bufferSoc`
   - kein aktiver Ladeplan vorliegt
   - `evcc` nicht bereits selbst ueber den konfigurierten Mindeststrom hinaus regelt
-- Schaltet nur dann wieder auf `pv`, wenn das Add-on `minpv` selbst gesetzt hat und anschliessend `grid_power` fuer die konfigurierte Import-Dauer bei oder ueber der Import-Schwelle liegt
+- Schaltet nur dann wieder auf `pv`, wenn das Add-on `minpv` selbst gesetzt hat und anschliessend mindestens eine dieser Bedingungen greift:
+  - `grid_power` liegt fuer die konfigurierte Import-Dauer bei oder ueber der Import-Schwelle
+  - `battery_power` liegt fuer die konfigurierte Entlade-Dauer bei oder ueber der Batterientlade-Schwelle
+
+Hinweis:
+
+- Die Batterierueckschaltung nimmt aktuell an, dass positive Werte Entladung bedeuten.
 
 ## MQTT-Topics
 
 Standardmaessig wird mit Prefix `evcc` gearbeitet. Fuer `loadpoint_id: 1` nutzt das Add-on unter anderem:
 
 - `evcc/site/grid/power`
+- `evcc/site/batteryPower`
 - `evcc/site/bufferSoc`
 - `evcc/site/batterySoc`
 - `evcc/loadpoints/1/connected`
@@ -92,12 +109,17 @@ mqtt_password: ""
 mqtt_topic_prefix: evcc
 loadpoint_id: 1
 homeassistant_power_sensor_entity_id: ""
+homeassistant_battery_power_sensor_entity_id: ""
 export_power_threshold_w: -100
 import_power_threshold_w: 100
 export_delay_seconds: 60
 import_delay_seconds: 30
+battery_discharge_power_threshold_w: 200
+battery_discharge_delay_seconds: 60
 evcc_active_current_threshold: 6.0
 auto_reset_on_restart: true
 ```
 
 Wenn `homeassistant_power_sensor_entity_id` gesetzt ist, verwendet das Add-on diesen Home-Assistant-Sensor als Quelle fuer `grid_power`. In der Ingress-UI werden dafuer Sensoren mit Einheit `W` vorgeschlagen. Falls die Vorschlagsliste leer bleibt, kann die Entity-ID auch direkt manuell eingetragen werden. Bleibt das Feld leer, nutzt das Add-on weiter `evcc/site/grid/power` per MQTT.
+
+Wenn `homeassistant_battery_power_sensor_entity_id` gesetzt ist, verwendet das Add-on diesen Home-Assistant-Sensor als Quelle fuer `battery_power`. Falls der Sensor nicht gelesen werden kann, faellt das Add-on fuer die Batterieleistung auf `evcc/site/batteryPower` zurueck.
