@@ -720,15 +720,17 @@ class EvccAutoMode:
         if not self.config.max_pv_mode_enabled:
             return
 
+        reset_current = self.config.max_pv_min_current_a
         restore_mode = self.max_pv_restore_mode
         forced_mode_active = self.max_pv_forced_mode_active
         updated_payload = config_to_dict(self.config)
         updated_payload["max_pv_mode_enabled"] = False
         next_config = config_from_payload(updated_payload)
         validate_config(next_config)
-        self.config = next_config
 
-        self.reset_max_pv_min_current(reason=reason)
+        if self.last_min_current_command != reset_current:
+            self.publish_min_current(reset_current, reason=reason, source="max_pv_reset")
+        self.config = next_config
         if forced_mode_active and restore_mode:
             self.publish_mode(restore_mode, reason=reason, source="max_pv_mode_restore")
 

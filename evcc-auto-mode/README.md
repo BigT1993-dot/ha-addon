@@ -31,6 +31,10 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
+Neu in `0.3.11`:
+
+- beim Deaktivieren von `Max PV` wird `minCurrent` jetzt wieder aktiv auf den konfigurierten Mindestwert zurueckgesetzt
+
 Neu in `0.3.10`:
 
 - optionaler Home-Assistant-Sensor fuer Hausbatterie-SoC hinzugefuegt
