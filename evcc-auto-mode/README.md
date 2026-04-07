@@ -31,6 +31,11 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
+Neu in `0.3.4`:
+
+- letzter bekannter Live-Zustand wird jetzt ueber Neustarts gespeichert
+- MQTT-Topic-Werte und letzte Sensorwerte bleiben damit in der UI sichtbar, bis neue Daten eintreffen
+
 Neu in `0.3.3`:
 
 - `At A Glance` zeigt jetzt zusaetzlich den Auto-SoC aus einem optionalen HA-Sensor

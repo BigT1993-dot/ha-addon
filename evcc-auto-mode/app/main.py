@@ -436,6 +436,7 @@ class EvccAutoMode:
             except ValueError:
                 LOGGER.warning("Ignored invalid payload for %s: %r", msg.topic, payload)
                 return
+            self.persist_runtime_state()
 
         self.evaluate()
 
@@ -736,6 +737,7 @@ class EvccAutoMode:
 
         with self.state_lock:
             self.update_grid_power(value, source=f"homeassistant:{entity_id}")
+            self.persist_runtime_state()
 
     def refresh_battery_power_source(self) -> None:
         entity_id = self.config.homeassistant_battery_power_sensor_entity_id
@@ -768,6 +770,7 @@ class EvccAutoMode:
         with self.state_lock:
             self.homeassistant_battery_power_sensor_error = None
             self.update_battery_power(value, source=f"homeassistant:{entity_id}")
+            self.persist_runtime_state()
 
     def refresh_max_pv_inverter_input_power(self) -> None:
         entity_id = self.config.max_pv_inverter_input_power_sensor_entity_id
@@ -793,6 +796,7 @@ class EvccAutoMode:
         with self.state_lock:
             self.max_pv_sensor_error = None
             self.inverter_input_power = value
+            self.persist_runtime_state()
 
     def refresh_vehicle_soc_source(self) -> None:
         entity_id = self.config.homeassistant_vehicle_soc_sensor_entity_id
@@ -818,6 +822,7 @@ class EvccAutoMode:
         with self.state_lock:
             self.homeassistant_vehicle_soc_sensor_error = None
             self.vehicle_soc = value
+            self.persist_runtime_state()
 
     def fetch_homeassistant_state(self, entity_id: str) -> dict[str, Any]:
         return self.homeassistant_api_get(f"/states/{entity_id}")
@@ -936,6 +941,24 @@ class EvccAutoMode:
         self.history = list(state.get("history", []))
         self.automation_enabled = parse_config_bool(state.get("automation_enabled", True))
         self.simulation_enabled = parse_config_bool(state.get("simulation_enabled", False))
+        self.topic_values = dict(state.get("topic_values", {}))
+        self.connected = parse_config_bool(state.get("connected", False))
+        self.plan_active = parse_config_bool(state.get("plan_active", False))
+        self.current_mode = str(state.get("current_mode", "") or "")
+        self.offered_current = float(state.get("offered_current", 0.0) or 0.0)
+        self.grid_power = float(state.get("grid_power", 0.0) or 0.0)
+        self.grid_power_source = str(state.get("grid_power_source", "mqtt") or "mqtt")
+        self.battery_power = parse_optional_persisted_float(state.get("battery_power"))
+        self.battery_power_source = str(state.get("battery_power_source", "mqtt") or "mqtt")
+        self.buffer_soc = parse_optional_persisted_float(state.get("buffer_soc"))
+        self.battery_soc = parse_optional_persisted_float(state.get("battery_soc"))
+        self.vehicle_soc = parse_optional_persisted_float(state.get("vehicle_soc"))
+        self.home_power = parse_optional_persisted_float(state.get("home_power"))
+        self.inverter_input_power = parse_optional_persisted_float(state.get("inverter_input_power"))
+        self.last_mode_command = str(state.get("last_mode_command") or "") or None
+        self.last_min_current_command = parse_optional_persisted_int(state.get("last_min_current_command"))
+        self.last_decision_reason = str(state.get("last_decision_reason") or self.last_decision_reason)
+        self.last_restore_reason = str(state.get("last_restore_reason") or self.last_restore_reason)
         if self.config.auto_reset_on_restart:
             self.auto_mode_active = False
             self.persist_runtime_state()
@@ -949,6 +972,24 @@ class EvccAutoMode:
                 "auto_mode_active": self.auto_mode_active,
                 "automation_enabled": self.automation_enabled,
                 "simulation_enabled": self.simulation_enabled,
+                "connected": self.connected,
+                "plan_active": self.plan_active,
+                "current_mode": self.current_mode,
+                "offered_current": self.offered_current,
+                "grid_power": self.grid_power,
+                "grid_power_source": self.grid_power_source,
+                "battery_power": self.battery_power,
+                "battery_power_source": self.battery_power_source,
+                "buffer_soc": self.buffer_soc,
+                "battery_soc": self.battery_soc,
+                "vehicle_soc": self.vehicle_soc,
+                "home_power": self.home_power,
+                "inverter_input_power": self.inverter_input_power,
+                "last_mode_command": self.last_mode_command,
+                "last_min_current_command": self.last_min_current_command,
+                "last_decision_reason": self.last_decision_reason,
+                "last_restore_reason": self.last_restore_reason,
+                "topic_values": self.topic_values,
                 "history": self.history,
                 "updated_at": iso_utc_now(),
             }
@@ -1322,6 +1363,18 @@ def parse_optional_float(value: str) -> float | None:
     if value == "":
         return None
     return float(value)
+
+
+def parse_optional_persisted_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
+def parse_optional_persisted_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
 
 
 def elapsed_seconds(started_at: float | None, now: float) -> float | None:
