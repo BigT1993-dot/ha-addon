@@ -1,5 +1,5 @@
 name: evcc Auto Mode
-version: "0.3.1"
+version: "0.3.3"
 slug: evcc_auto_mode
 description: Automatically switch evcc between pv and minpv via MQTT.
 url: "https://github.com/BigT1993-dot/ha-addon/tree/main/evcc-auto-mode"
@@ -28,6 +28,7 @@ options:
   loadpoint_id: 1
   homeassistant_power_sensor_entity_id: ""
   homeassistant_battery_power_sensor_entity_id: ""
+  homeassistant_vehicle_soc_sensor_entity_id: ""
   export_power_threshold_w: -100
   import_power_threshold_w: 100
   export_delay_seconds: 60
@@ -39,6 +40,7 @@ options:
   max_pv_inverter_input_power_sensor_entity_id: ""
   max_pv_inverter_power_w: 8500
   max_pv_battery_discharge_power_w: 4900
+  max_pv_min_battery_soc: 85
   max_pv_min_current_a: 6
   max_pv_max_current_a: 16
   max_pv_phases: 3
@@ -54,6 +56,7 @@ schema:
   loadpoint_id: int(1,)
   homeassistant_power_sensor_entity_id: str?
   homeassistant_battery_power_sensor_entity_id: str?
+  homeassistant_vehicle_soc_sensor_entity_id: str?
   export_power_threshold_w: float
   import_power_threshold_w: float
   export_delay_seconds: int(1,)
@@ -65,6 +68,7 @@ schema:
   max_pv_inverter_input_power_sensor_entity_id: str?
   max_pv_inverter_power_w: float(0.000001,)
   max_pv_battery_discharge_power_w: float(0.000001,)
+  max_pv_min_battery_soc: int(0,100)
   max_pv_min_current_a: int(1,)
   max_pv_max_current_a: int(1,)
   max_pv_phases: int(1,3)

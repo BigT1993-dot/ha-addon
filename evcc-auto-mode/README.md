@@ -31,6 +31,17 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
+Neu in `0.3.3`:
+
+- `At A Glance` zeigt jetzt zusaetzlich den Auto-SoC aus einem optionalen HA-Sensor
+- `Max PV` nutzt jetzt eine eigene Hausbatterie-SoC-Schwelle statt der bisherigen Buffer-SoC-Logik
+- `Max PV Battery Max Discharge` klarer benannt
+
+Neu in `0.3.2`:
+
+- prominenter `Max PV Mode`-Schalter direkt im `Overview`
+- eigenes UI-Action-API fuer schnelles Ein- und Ausschalten ohne Config-Formular
+
 Neu in `0.3.1`:
 
 - Auto-Refresh laeuft jetzt nur noch auf dem `Overview`-Tab

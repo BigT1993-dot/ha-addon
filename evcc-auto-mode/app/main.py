@@ -44,6 +44,7 @@ class AddonConfig:
     loadpoint_id: int
     homeassistant_power_sensor_entity_id: str
     homeassistant_battery_power_sensor_entity_id: str
+    homeassistant_vehicle_soc_sensor_entity_id: str
     export_power_threshold_w: float
     import_power_threshold_w: float
     export_delay_seconds: int
@@ -55,6 +56,7 @@ class AddonConfig:
     max_pv_inverter_input_power_sensor_entity_id: str
     max_pv_inverter_power_w: float
     max_pv_battery_discharge_power_w: float
+    max_pv_min_battery_soc: float
     max_pv_min_current_a: int
     max_pv_max_current_a: int
     max_pv_phases: int
@@ -140,6 +142,9 @@ def read_config() -> AddonConfig:
         homeassistant_battery_power_sensor_entity_id=str(
             raw.get("homeassistant_battery_power_sensor_entity_id", "") or ""
         ).strip(),
+        homeassistant_vehicle_soc_sensor_entity_id=str(
+            raw.get("homeassistant_vehicle_soc_sensor_entity_id", "") or ""
+        ).strip(),
         export_power_threshold_w=float(raw.get("export_power_threshold_w", -100.0)),
         import_power_threshold_w=float(raw.get("import_power_threshold_w", 100.0)),
         export_delay_seconds=int(raw.get("export_delay_seconds", 60)),
@@ -153,6 +158,7 @@ def read_config() -> AddonConfig:
         ).strip(),
         max_pv_inverter_power_w=float(raw.get("max_pv_inverter_power_w", 8500.0)),
         max_pv_battery_discharge_power_w=float(raw.get("max_pv_battery_discharge_power_w", 4900.0)),
+        max_pv_min_battery_soc=float(raw.get("max_pv_min_battery_soc", 85.0)),
         max_pv_min_current_a=int(raw.get("max_pv_min_current_a", 6)),
         max_pv_max_current_a=int(raw.get("max_pv_max_current_a", 16)),
         max_pv_phases=int(raw.get("max_pv_phases", 3)),
@@ -200,6 +206,7 @@ def config_to_dict(config: AddonConfig) -> dict[str, Any]:
         "loadpoint_id": config.loadpoint_id,
         "homeassistant_power_sensor_entity_id": config.homeassistant_power_sensor_entity_id,
         "homeassistant_battery_power_sensor_entity_id": config.homeassistant_battery_power_sensor_entity_id,
+        "homeassistant_vehicle_soc_sensor_entity_id": config.homeassistant_vehicle_soc_sensor_entity_id,
         "export_power_threshold_w": config.export_power_threshold_w,
         "import_power_threshold_w": config.import_power_threshold_w,
         "export_delay_seconds": config.export_delay_seconds,
@@ -211,6 +218,7 @@ def config_to_dict(config: AddonConfig) -> dict[str, Any]:
         "max_pv_inverter_input_power_sensor_entity_id": config.max_pv_inverter_input_power_sensor_entity_id,
         "max_pv_inverter_power_w": config.max_pv_inverter_power_w,
         "max_pv_battery_discharge_power_w": config.max_pv_battery_discharge_power_w,
+        "max_pv_min_battery_soc": config.max_pv_min_battery_soc,
         "max_pv_min_current_a": config.max_pv_min_current_a,
         "max_pv_max_current_a": config.max_pv_max_current_a,
         "max_pv_phases": config.max_pv_phases,
@@ -244,6 +252,9 @@ def config_from_payload(payload: dict[str, Any]) -> AddonConfig:
         homeassistant_battery_power_sensor_entity_id=str(
             payload.get("homeassistant_battery_power_sensor_entity_id", "") or ""
         ).strip(),
+        homeassistant_vehicle_soc_sensor_entity_id=str(
+            payload.get("homeassistant_vehicle_soc_sensor_entity_id", "") or ""
+        ).strip(),
         export_power_threshold_w=float(payload.get("export_power_threshold_w", -100.0)),
         import_power_threshold_w=float(payload.get("import_power_threshold_w", 100.0)),
         export_delay_seconds=int(payload.get("export_delay_seconds", 60)),
@@ -257,6 +268,7 @@ def config_from_payload(payload: dict[str, Any]) -> AddonConfig:
         ).strip(),
         max_pv_inverter_power_w=float(payload.get("max_pv_inverter_power_w", 8500.0)),
         max_pv_battery_discharge_power_w=float(payload.get("max_pv_battery_discharge_power_w", 4900.0)),
+        max_pv_min_battery_soc=float(payload.get("max_pv_min_battery_soc", 85.0)),
         max_pv_min_current_a=int(payload.get("max_pv_min_current_a", 6)),
         max_pv_max_current_a=int(payload.get("max_pv_max_current_a", 16)),
         max_pv_phases=int(payload.get("max_pv_phases", 3)),
@@ -294,6 +306,7 @@ class EvccAutoMode:
         self.mqtt_battery_power_updated_at: float | None = None
         self.buffer_soc: float | None = None
         self.battery_soc: float | None = None
+        self.vehicle_soc: float | None = None
         self.home_power: float | None = None
         self.inverter_input_power: float | None = None
         self.auto_mode_active = False
@@ -314,8 +327,10 @@ class EvccAutoMode:
         self.homeassistant_power_sensor_cache_at: float | None = None
         self.homeassistant_power_sensor_error: str | None = None
         self.homeassistant_battery_power_sensor_error: str | None = None
+        self.homeassistant_vehicle_soc_sensor_error: str | None = None
         self.last_power_sensor_poll_at: float | None = None
         self.last_battery_power_sensor_poll_at: float | None = None
+        self.last_vehicle_soc_poll_at: float | None = None
         self.last_inverter_input_power_poll_at: float | None = None
         self.simulation_enabled = False
         self.last_mode_command_simulated = False
@@ -341,6 +356,7 @@ class EvccAutoMode:
             while not self.shutdown_event.wait(1):
                 self.refresh_grid_power_source()
                 self.refresh_battery_power_source()
+                self.refresh_vehicle_soc_source()
                 self.refresh_max_pv_inverter_input_power()
                 self.evaluate()
         finally:
@@ -495,8 +511,15 @@ class EvccAutoMode:
             )
         elif now - self.export_timer_started_at < self.config.export_delay_seconds:
             blockers.append("export delay not reached yet")
-        if self.battery_soc is None or self.buffer_soc is None:
-            blockers.append("battery or buffer SoC missing")
+        if self.battery_soc is None:
+            blockers.append("battery SoC missing")
+        elif self.config.max_pv_mode_enabled:
+            if self.battery_soc <= self.config.max_pv_min_battery_soc:
+                blockers.append(
+                    f"battery SoC is not above Max PV threshold {format_threshold(self.config.max_pv_min_battery_soc)} %"
+                )
+        elif self.buffer_soc is None:
+            blockers.append("buffer SoC missing")
         elif self.battery_soc >= self.buffer_soc:
             blockers.append("battery SoC is not below buffer SoC")
         if blockers:
@@ -561,10 +584,12 @@ class EvccAutoMode:
             return
         if not self.connected or self.plan_active:
             return
-        if self.battery_soc is None or self.buffer_soc is None:
+        if self.battery_soc is None:
             return
-        if self.battery_soc >= self.buffer_soc:
-            self.reset_max_pv_min_current(reason="battery SoC is not below buffer SoC")
+        if self.battery_soc <= self.config.max_pv_min_battery_soc:
+            self.reset_max_pv_min_current(
+                reason=f"battery SoC is not above Max PV threshold {format_threshold(self.config.max_pv_min_battery_soc)} %"
+            )
             return
         if self.home_power is None or self.inverter_input_power is None:
             return
@@ -769,6 +794,31 @@ class EvccAutoMode:
             self.max_pv_sensor_error = None
             self.inverter_input_power = value
 
+    def refresh_vehicle_soc_source(self) -> None:
+        entity_id = self.config.homeassistant_vehicle_soc_sensor_entity_id
+        if not entity_id:
+            return
+
+        now = time.monotonic()
+        if (
+            self.last_vehicle_soc_poll_at is not None
+            and now - self.last_vehicle_soc_poll_at < POWER_SENSOR_POLL_INTERVAL_SECONDS
+        ):
+            return
+        self.last_vehicle_soc_poll_at = now
+
+        try:
+            state = self.fetch_homeassistant_state(entity_id)
+            value = parse_float(str(state["state"]))
+        except Exception as err:
+            self.homeassistant_vehicle_soc_sensor_error = str(err)
+            LOGGER.exception("Failed to refresh Home Assistant vehicle SoC sensor %s", entity_id)
+            return
+
+        with self.state_lock:
+            self.homeassistant_vehicle_soc_sensor_error = None
+            self.vehicle_soc = value
+
     def fetch_homeassistant_state(self, entity_id: str) -> dict[str, Any]:
         return self.homeassistant_api_get(f"/states/{entity_id}")
 
@@ -969,6 +1019,7 @@ class EvccAutoMode:
                     "power_sensor_options": self.list_homeassistant_power_sensors(),
                     "power_sensor_error": self.homeassistant_power_sensor_error,
                     "battery_power_sensor_error": self.homeassistant_battery_power_sensor_error,
+                    "vehicle_soc_sensor_error": self.homeassistant_vehicle_soc_sensor_error,
                     "max_pv_sensor_error": self.max_pv_sensor_error,
                 },
                 "topics": self.config.topics,
@@ -985,6 +1036,7 @@ class EvccAutoMode:
                     "battery_power_source": self.battery_power_source,
                     "buffer_soc": self.buffer_soc,
                     "battery_soc": self.battery_soc,
+                    "vehicle_soc": self.vehicle_soc,
                     "home_power": self.home_power,
                     "inverter_input_power": self.inverter_input_power,
                     "max_pv_dynamic_max_power_w": None if max_pv_metrics is None else max_pv_metrics["dynamic_max_power_w"],
@@ -1051,6 +1103,7 @@ class EvccAutoMode:
             self.plan_active = False
             self.buffer_soc = None
             self.battery_soc = None
+            self.vehicle_soc = None
             self.home_power = None
             self.inverter_input_power = None
             self.auto_mode_active = False
@@ -1061,8 +1114,10 @@ class EvccAutoMode:
             self.homeassistant_power_sensor_cache_at = None
             self.homeassistant_power_sensor_error = None
             self.homeassistant_battery_power_sensor_error = None
+            self.homeassistant_vehicle_soc_sensor_error = None
             self.last_power_sensor_poll_at = None
             self.last_battery_power_sensor_poll_at = None
+            self.last_vehicle_soc_poll_at = None
             self.last_inverter_input_power_poll_at = None
 
         write_runtime_config(next_config)
@@ -1103,6 +1158,33 @@ class EvccAutoMode:
                 reason=reason,
                 details={"source": "ui", "simulation_enabled": enabled},
             )
+            self.persist_runtime_state()
+
+        self.evaluate()
+        return self.get_debug_snapshot()
+
+    def update_max_pv_mode(self, payload: dict[str, Any]) -> dict[str, Any]:
+        enabled = parse_config_bool(payload["enabled"])
+        reason = str(payload.get("reason") or "user pressed max pv mode control").strip()
+        with self.state_lock:
+            if self.config.max_pv_mode_enabled == enabled:
+                return self.get_debug_snapshot()
+
+            updated_payload = config_to_dict(self.config)
+            updated_payload["max_pv_mode_enabled"] = enabled
+            next_config = config_from_payload(updated_payload)
+            validate_config(next_config)
+            self.config = next_config
+            if not enabled:
+                self.reset_max_pv_min_current(reason=reason)
+
+            self.record_event(
+                "max_pv_mode_toggle",
+                f"max_pv_mode_enabled set to {format_value(enabled)}",
+                reason=reason,
+                details={"source": "ui", "max_pv_mode_enabled": enabled},
+            )
+            write_runtime_config(next_config)
             self.persist_runtime_state()
 
         self.evaluate()
@@ -1156,7 +1238,7 @@ class DebugServer:
                 self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
             def do_POST(self) -> None:
-                if self.path not in {"/api/config", "/api/automation", "/api/simulation"}:
+                if self.path not in {"/api/config", "/api/automation", "/api/simulation", "/api/max-pv-mode"}:
                     self.send_error(HTTPStatus.NOT_FOUND, "Not found")
                     return
 
@@ -1168,6 +1250,8 @@ class DebugServer:
                         snapshot = worker.update_config(payload)
                     elif self.path == "/api/simulation":
                         snapshot = worker.update_simulation(payload)
+                    elif self.path == "/api/max-pv-mode":
+                        snapshot = worker.update_max_pv_mode(payload)
                     else:
                         snapshot = worker.update_automation(payload)
                 except (json.JSONDecodeError, ValueError, KeyError) as err:
@@ -1285,6 +1369,7 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
     compact_status = render_compact_status(snapshot["state"])
     decision_panel = render_decision_panel(snapshot["state"])
     max_pv_panel = render_max_pv_panel(snapshot["state"], snapshot["config"])
+    max_pv_controls = render_max_pv_controls(snapshot["state"], snapshot["config"])
     debug_state = render_state_rows(snapshot["state"])
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -1596,6 +1681,10 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
             {render_automation_controls(snapshot["state"])}
           </section>
           <section class="card">
+            <h2>Max PV Mode</h2>
+            {max_pv_controls}
+          </section>
+          <section class="card">
             <h2>Simulation</h2>
             {render_simulation_controls(snapshot["state"])}
           </section>
@@ -1640,8 +1729,11 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       const status = document.getElementById("save-status");
       const automationStatus = document.getElementById("automation-status");
       const simulationStatus = document.getElementById("simulation-status");
+      const maxPvStatus = document.getElementById("max-pv-status");
       const simulationEnableButton = document.getElementById("simulation-enable");
       const simulationDisableButton = document.getElementById("simulation-disable");
+      const maxPvEnableButton = document.getElementById("max-pv-enable");
+      const maxPvDisableButton = document.getElementById("max-pv-disable");
       const stopButton = document.getElementById("automation-stop");
       const startButton = document.getElementById("automation-start");
       const refreshButton = document.getElementById("page-refresh");
@@ -1694,6 +1786,7 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
             loadpoint_id: Number(formData.get("loadpoint_id")),
             homeassistant_power_sensor_entity_id: formData.get("homeassistant_power_sensor_entity_id"),
             homeassistant_battery_power_sensor_entity_id: formData.get("homeassistant_battery_power_sensor_entity_id"),
+            homeassistant_vehicle_soc_sensor_entity_id: formData.get("homeassistant_vehicle_soc_sensor_entity_id"),
             export_power_threshold_w: Number(formData.get("export_power_threshold_w")),
             import_power_threshold_w: Number(formData.get("import_power_threshold_w")),
             export_delay_seconds: Number(formData.get("export_delay_seconds")),
@@ -1705,6 +1798,7 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
             max_pv_inverter_input_power_sensor_entity_id: formData.get("max_pv_inverter_input_power_sensor_entity_id"),
             max_pv_inverter_power_w: Number(formData.get("max_pv_inverter_power_w")),
             max_pv_battery_discharge_power_w: Number(formData.get("max_pv_battery_discharge_power_w")),
+            max_pv_min_battery_soc: Number(formData.get("max_pv_min_battery_soc")),
             max_pv_min_current_a: Number(formData.get("max_pv_min_current_a")),
             max_pv_max_current_a: Number(formData.get("max_pv_max_current_a")),
             max_pv_phases: Number(formData.get("max_pv_phases")),
@@ -1795,6 +1889,35 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
           simulationStatus.textContent = `Save failed: ${{error.message}}`;
         }}
       }}
+      async function toggleMaxPvMode(enabled, reason) {{
+        if (!maxPvStatus) {{
+          return;
+        }}
+        maxPvStatus.textContent = enabled ? "Enabling Max PV..." : "Disabling Max PV...";
+        try {{
+          const response = await fetch("api/max-pv-mode", {{
+            method: "POST",
+            headers: {{ "Content-Type": "application/json" }},
+            body: JSON.stringify({{ enabled, reason }}),
+          }});
+          const raw = await response.text();
+          let data = {{}};
+          if (raw) {{
+            try {{
+              data = JSON.parse(raw);
+            }} catch (_error) {{
+              throw new Error(raw);
+            }}
+          }}
+          if (!response.ok) {{
+            throw new Error(data.error || "Max PV update failed");
+          }}
+          maxPvStatus.textContent = "Saved. Reloading state...";
+          window.location.reload();
+        }} catch (error) {{
+          maxPvStatus.textContent = `Save failed: ${{error.message}}`;
+        }}
+      }}
       if (stopButton) {{
         stopButton.addEventListener("click", () => toggleAutomation(false, "user pressed STOP automation"));
       }}
@@ -1806,6 +1929,12 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       }}
       if (simulationDisableButton) {{
         simulationDisableButton.addEventListener("click", () => toggleSimulation(false, "user disabled what-if simulation"));
+      }}
+      if (maxPvEnableButton) {{
+        maxPvEnableButton.addEventListener("click", () => toggleMaxPvMode(true, "user enabled max pv mode"));
+      }}
+      if (maxPvDisableButton) {{
+        maxPvDisableButton.addEventListener("click", () => toggleMaxPvMode(false, "user disabled max pv mode"));
       }}
       if (refreshButton) {{
         refreshButton.addEventListener("click", refreshPageNow);
@@ -1849,9 +1978,11 @@ def render_overview_cards(state: dict[str, Any]) -> str:
     cards = [
         ("Mode", state.get("current_mode")),
         ("Auto", "active" if state.get("auto_mode_active") else "idle"),
+        ("Car SoC", format_compact_percent(state.get("vehicle_soc"))),
         ("Grid", format_compact_power(state.get("grid_power"))),
         ("Home", format_compact_power(state.get("home_power"))),
-        ("Battery", format_compact_power(state.get("battery_power"))),
+        ("Battery SoC", format_compact_percent(state.get("battery_soc"))),
+        ("Battery Power", format_compact_power(state.get("battery_power"))),
         ("Min Current", format_compact_current(state.get("last_min_current_command"))),
     ]
     return "".join(
@@ -1884,10 +2015,12 @@ def render_decision_panel(state: dict[str, Any]) -> str:
 def render_max_pv_panel(state: dict[str, Any], config: dict[str, Any]) -> str:
     rows = [
         ("Enabled", format_value(config.get("max_pv_mode_enabled"))),
+        ("Battery SoC Gate", format_compact_percent(config.get("max_pv_min_battery_soc"))),
         ("Current Max Calculated", format_compact_current(state.get("max_pv_target_current_a"))),
         ("Dynamic Max Power", format_compact_power(state.get("max_pv_dynamic_max_power_w"))),
         ("Target Charge Power", format_compact_power(state.get("max_pv_target_power_w"))),
         ("Phases", format_value(state.get("max_pv_phases"))),
+        ("Battery Max Discharge", format_compact_power(config.get("max_pv_battery_discharge_power_w"))),
         ("Home Power", format_compact_power(state.get("home_power"))),
         ("Inverter Input", format_compact_power(state.get("inverter_input_power"))),
     ]
@@ -1922,6 +2055,7 @@ def render_config_form(config: dict[str, Any]) -> str:
     max_pv_mode_enabled = "true" if config.get("max_pv_mode_enabled", False) else "false"
     selected_sensor = str(config.get("homeassistant_power_sensor_entity_id", ""))
     selected_battery_sensor = str(config.get("homeassistant_battery_power_sensor_entity_id", ""))
+    selected_vehicle_soc_sensor = str(config.get("homeassistant_vehicle_soc_sensor_entity_id", ""))
     selected_max_pv_sensor = str(config.get("max_pv_inverter_input_power_sensor_entity_id", ""))
     sensor_options = render_power_sensor_options(
         selected_sensor,
@@ -1929,6 +2063,7 @@ def render_config_form(config: dict[str, Any]) -> str:
     )
     power_sensor_error = str(config.get("power_sensor_error") or "")
     battery_power_sensor_error = str(config.get("battery_power_sensor_error") or "")
+    vehicle_soc_sensor_error = str(config.get("vehicle_soc_sensor_error") or "")
     max_pv_sensor_error = str(config.get("max_pv_sensor_error") or "")
     status_messages = []
     if power_sensor_error:
@@ -1936,6 +2071,10 @@ def render_config_form(config: dict[str, Any]) -> str:
     if battery_power_sensor_error:
         status_messages.append(
             f'<div class="status warn">Battery power sensor fallback active: {escape_html(battery_power_sensor_error)}</div>'
+        )
+    if vehicle_soc_sensor_error:
+        status_messages.append(
+            f'<div class="status warn">Vehicle SoC sensor unavailable: {escape_html(vehicle_soc_sensor_error)}</div>'
         )
     if max_pv_sensor_error:
         status_messages.append(
@@ -1971,6 +2110,9 @@ def render_config_form(config: dict[str, Any]) -> str:
       <label>Home Assistant Battery Power Sensor
         <input name="homeassistant_battery_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_battery_sensor)}" placeholder="sensor.battery_power">
       </label>
+      <label>Home Assistant Vehicle SoC Sensor
+        <input name="homeassistant_vehicle_soc_sensor_entity_id" value="{escape_html(selected_vehicle_soc_sensor)}" placeholder="sensor.auto_soc">
+      </label>
       <label>Max PV Inverter Input Power Sensor
         <input name="max_pv_inverter_input_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_max_pv_sensor)}" placeholder="sensor.inverter_eingangsleistung">
       </label>
@@ -1995,7 +2137,8 @@ def render_config_form(config: dict[str, Any]) -> str:
         <input name="max_pv_mode_enabled" list="bool-values" value="{max_pv_mode_enabled}" required>
       </label>
       <label>Max PV Inverter Power (W)<input name="max_pv_inverter_power_w" type="number" step="1" min="1" value="{escape_html(str(config["max_pv_inverter_power_w"]))}" required></label>
-      <label>Max PV Battery Discharge Power (W)<input name="max_pv_battery_discharge_power_w" type="number" step="1" min="1" value="{escape_html(str(config["max_pv_battery_discharge_power_w"]))}" required></label>
+      <label>Max PV Battery Max Discharge (W)<input name="max_pv_battery_discharge_power_w" type="number" step="1" min="1" value="{escape_html(str(config["max_pv_battery_discharge_power_w"]))}" required></label>
+      <label>Max PV Min Battery SoC (%)<input name="max_pv_min_battery_soc" type="number" step="1" min="0" max="100" value="{escape_html(str(config["max_pv_min_battery_soc"]))}" required></label>
       <label>Max PV Min Current (A)<input name="max_pv_min_current_a" type="number" min="1" value="{escape_html(str(config["max_pv_min_current_a"]))}" required></label>
       <label>Max PV Max Current (A)<input name="max_pv_max_current_a" type="number" min="1" value="{escape_html(str(config["max_pv_max_current_a"]))}" required></label>
       <label>Max PV Phases<input name="max_pv_phases" type="number" min="1" max="3" value="{escape_html(str(config["max_pv_phases"]))}" required></label>
@@ -2066,6 +2209,23 @@ def render_simulation_controls(state: dict[str, Any]) -> str:
 """
 
 
+def render_max_pv_controls(state: dict[str, Any], config: dict[str, Any]) -> str:
+    enabled = bool(config.get("max_pv_mode_enabled"))
+    status = "max pv active" if enabled else "max pv off"
+    calculated = format_compact_current(state.get("max_pv_target_current_a"))
+    return f"""
+<div class="label">Status</div>
+<div class="value">{escape_html(status)}</div>
+<div class="label" style="margin-top: 12px;">Current Max Calculated</div>
+<div class="value">{escape_html(calculated)}</div>
+<div class="actions">
+  <button type="button" class="button-secondary" id="max-pv-enable">Enable Max PV</button>
+  <button type="button" class="button-danger" id="max-pv-disable">Disable Max PV</button>
+  <div class="status" id="max-pv-status">Main shortcut for Max PV on the overview screen.</div>
+</div>
+"""
+
+
 def render_history_table(history: list[dict[str, Any]]) -> str:
     if not history:
         return '<div class="muted">No history recorded yet.</div>'
@@ -2131,6 +2291,18 @@ def format_compact_current(value: Any) -> str:
     return f"{round(number, 1)} A"
 
 
+def format_compact_percent(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number.is_integer():
+        return f"{int(number)} %"
+    return f"{round(number, 1)} %"
+
+
 def format_threshold(value: float) -> str:
     if value.is_integer():
         return str(int(value))
@@ -2194,6 +2366,8 @@ def validate_config(config: AddonConfig) -> None:
         raise ValueError("max_pv_inverter_power_w must be > 0")
     if config.max_pv_battery_discharge_power_w <= 0:
         raise ValueError("max_pv_battery_discharge_power_w must be > 0")
+    if config.max_pv_min_battery_soc < 0 or config.max_pv_min_battery_soc > 100:
+        raise ValueError("max_pv_min_battery_soc must be between 0 and 100")
     if config.max_pv_min_current_a < 1:
         raise ValueError("max_pv_min_current_a must be >= 1")
     if config.max_pv_max_current_a < config.max_pv_min_current_a:
