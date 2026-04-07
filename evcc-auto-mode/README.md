@@ -31,6 +31,12 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
+Neu in `0.2.23`:
+
+- Export- und Import-Schwellen unterstuetzen jetzt ebenfalls positive und negative Vorzeichen
+- positiver Export-Schwellenwert bedeutet Einspeisung ab `>= Schwelle`
+- negativer Import-Schwellenwert bedeutet Netzbezug ab `<= Schwelle`
+
 Neu in `0.2.22`:
 
 - Batterientlade-Schwelle unterstuetzt jetzt positive und negative Vorzeichen
@@ -139,6 +145,13 @@ battery_discharge_delay_seconds: 60
 evcc_active_current_threshold: 6.0
 auto_reset_on_restart: true
 ```
+
+Die Grid-Logik folgt dem Vorzeichen der konfigurierten Schwellen:
+
+- positiver Export-Schwellenwert: Einspeisung ab `>= Schwelle`
+- negativer Export-Schwellenwert: Einspeisung ab `<= Schwelle`
+- positiver Import-Schwellenwert: Netzbezug ab `>= Schwelle`
+- negativer Import-Schwellenwert: Netzbezug ab `<= Schwelle`
 
 Wenn `homeassistant_power_sensor_entity_id` gesetzt ist, verwendet das Add-on diesen Home-Assistant-Sensor als Quelle fuer `grid_power`. In der Ingress-UI werden dafuer Sensoren mit Einheit `W` vorgeschlagen. Falls die Vorschlagsliste leer bleibt, kann die Entity-ID auch direkt manuell eingetragen werden. Bleibt das Feld leer, nutzt das Add-on weiter `evcc/site/grid/power` per MQTT.
 

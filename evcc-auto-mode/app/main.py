@@ -374,12 +374,12 @@ class EvccAutoMode:
         with self.state_lock:
             now = time.monotonic()
 
-            if self.grid_power <= self.config.export_power_threshold_w:
+            if self.is_export_above_threshold():
                 self.export_timer_started_at = self.export_timer_started_at or now
             else:
                 self.export_timer_started_at = None
 
-            if self.grid_power >= self.config.import_power_threshold_w:
+            if self.is_import_above_threshold():
                 self.import_timer_started_at = self.import_timer_started_at or now
             else:
                 self.import_timer_started_at = None
@@ -430,8 +430,10 @@ class EvccAutoMode:
         if self.offered_current > self.config.evcc_active_current_threshold:
             blockers.append("evcc is actively regulating current")
         if self.export_timer_started_at is None:
+            threshold = self.config.export_power_threshold_w
+            direction = "at or above" if threshold >= 0 else "at or below"
             blockers.append(
-                f"no sustained export detected at or below {format_threshold(self.config.export_power_threshold_w)} W"
+                f"no sustained export detected {direction} {format_threshold(threshold)} W"
             )
         elif now - self.export_timer_started_at < self.config.export_delay_seconds:
             blockers.append("export delay not reached yet")
@@ -464,8 +466,10 @@ class EvccAutoMode:
             else:
                 blockers.append("grid power data is stale")
         elif self.import_timer_started_at is None:
+            threshold = self.config.import_power_threshold_w
+            direction = "at or above" if threshold >= 0 else "at or below"
             blockers.append(
-                f"no sustained grid import detected at or above {format_threshold(self.config.import_power_threshold_w)} W"
+                f"no sustained grid import detected {direction} {format_threshold(threshold)} W"
             )
         else:
             blockers.append("import delay not reached yet")
@@ -512,6 +516,18 @@ class EvccAutoMode:
         if threshold >= 0:
             return self.battery_power >= threshold
         return self.battery_power <= threshold
+
+    def is_export_above_threshold(self) -> bool:
+        threshold = self.config.export_power_threshold_w
+        if threshold >= 0:
+            return self.grid_power >= threshold
+        return self.grid_power <= threshold
+
+    def is_import_above_threshold(self) -> bool:
+        threshold = self.config.import_power_threshold_w
+        if threshold >= 0:
+            return self.grid_power >= threshold
+        return self.grid_power <= threshold
 
     def refresh_grid_power_source(self) -> None:
         entity_id = self.config.homeassistant_power_sensor_entity_id
@@ -1632,10 +1648,10 @@ def validate_config(config: AddonConfig) -> None:
         raise ValueError("mqtt_topic_prefix must not be empty")
     if config.loadpoint_id < 1:
         raise ValueError("loadpoint_id must be >= 1")
-    if config.export_power_threshold_w >= 0:
-        raise ValueError("export_power_threshold_w must be < 0")
-    if config.import_power_threshold_w <= 0:
-        raise ValueError("import_power_threshold_w must be > 0")
+    if config.export_power_threshold_w == 0:
+        raise ValueError("export_power_threshold_w must not be 0")
+    if config.import_power_threshold_w == 0:
+        raise ValueError("import_power_threshold_w must not be 0")
     if config.export_delay_seconds < 1:
         raise ValueError("export_delay_seconds must be >= 1")
     if config.import_delay_seconds < 1:
