@@ -44,6 +44,7 @@ class AddonConfig:
     loadpoint_id: int
     homeassistant_power_sensor_entity_id: str
     homeassistant_battery_power_sensor_entity_id: str
+    homeassistant_battery_soc_sensor_entity_id: str
     homeassistant_vehicle_soc_sensor_entity_id: str
     export_power_threshold_w: float
     import_power_threshold_w: float
@@ -142,6 +143,9 @@ def read_config() -> AddonConfig:
         homeassistant_battery_power_sensor_entity_id=str(
             raw.get("homeassistant_battery_power_sensor_entity_id", "") or ""
         ).strip(),
+        homeassistant_battery_soc_sensor_entity_id=str(
+            raw.get("homeassistant_battery_soc_sensor_entity_id", "") or ""
+        ).strip(),
         homeassistant_vehicle_soc_sensor_entity_id=str(
             raw.get("homeassistant_vehicle_soc_sensor_entity_id", "") or ""
         ).strip(),
@@ -206,6 +210,7 @@ def config_to_dict(config: AddonConfig) -> dict[str, Any]:
         "loadpoint_id": config.loadpoint_id,
         "homeassistant_power_sensor_entity_id": config.homeassistant_power_sensor_entity_id,
         "homeassistant_battery_power_sensor_entity_id": config.homeassistant_battery_power_sensor_entity_id,
+        "homeassistant_battery_soc_sensor_entity_id": config.homeassistant_battery_soc_sensor_entity_id,
         "homeassistant_vehicle_soc_sensor_entity_id": config.homeassistant_vehicle_soc_sensor_entity_id,
         "export_power_threshold_w": config.export_power_threshold_w,
         "import_power_threshold_w": config.import_power_threshold_w,
@@ -251,6 +256,9 @@ def config_from_payload(payload: dict[str, Any]) -> AddonConfig:
         homeassistant_power_sensor_entity_id=str(payload.get("homeassistant_power_sensor_entity_id", "") or "").strip(),
         homeassistant_battery_power_sensor_entity_id=str(
             payload.get("homeassistant_battery_power_sensor_entity_id", "") or ""
+        ).strip(),
+        homeassistant_battery_soc_sensor_entity_id=str(
+            payload.get("homeassistant_battery_soc_sensor_entity_id", "") or ""
         ).strip(),
         homeassistant_vehicle_soc_sensor_entity_id=str(
             payload.get("homeassistant_vehicle_soc_sensor_entity_id", "") or ""
@@ -327,9 +335,11 @@ class EvccAutoMode:
         self.homeassistant_power_sensor_cache_at: float | None = None
         self.homeassistant_power_sensor_error: str | None = None
         self.homeassistant_battery_power_sensor_error: str | None = None
+        self.homeassistant_battery_soc_sensor_error: str | None = None
         self.homeassistant_vehicle_soc_sensor_error: str | None = None
         self.last_power_sensor_poll_at: float | None = None
         self.last_battery_power_sensor_poll_at: float | None = None
+        self.last_battery_soc_poll_at: float | None = None
         self.last_vehicle_soc_poll_at: float | None = None
         self.last_inverter_input_power_poll_at: float | None = None
         self.simulation_enabled = False
@@ -358,6 +368,7 @@ class EvccAutoMode:
             while not self.shutdown_event.wait(1):
                 self.refresh_grid_power_source()
                 self.refresh_battery_power_source()
+                self.refresh_battery_soc_source()
                 self.refresh_vehicle_soc_source()
                 self.refresh_max_pv_inverter_input_power()
                 self.evaluate()
@@ -435,7 +446,8 @@ class EvccAutoMode:
                 elif msg.topic == topics["buffer_soc"]:
                     self.buffer_soc = parse_optional_float(payload)
                 elif msg.topic == topics["battery_soc"]:
-                    self.battery_soc = parse_optional_float(payload)
+                    if not self.config.homeassistant_battery_soc_sensor_entity_id:
+                        self.battery_soc = parse_optional_float(payload)
                 elif msg.topic == topics["home_power"]:
                     self.home_power = parse_float(payload)
             except ValueError:
@@ -872,6 +884,32 @@ class EvccAutoMode:
             self.vehicle_soc = value
             self.persist_runtime_state()
 
+    def refresh_battery_soc_source(self) -> None:
+        entity_id = self.config.homeassistant_battery_soc_sensor_entity_id
+        if not entity_id:
+            return
+
+        now = time.monotonic()
+        if (
+            self.last_battery_soc_poll_at is not None
+            and now - self.last_battery_soc_poll_at < POWER_SENSOR_POLL_INTERVAL_SECONDS
+        ):
+            return
+        self.last_battery_soc_poll_at = now
+
+        try:
+            state = self.fetch_homeassistant_state(entity_id)
+            value = parse_float(str(state["state"]))
+        except Exception as err:
+            self.homeassistant_battery_soc_sensor_error = str(err)
+            LOGGER.exception("Failed to refresh Home Assistant battery SoC sensor %s", entity_id)
+            return
+
+        with self.state_lock:
+            self.homeassistant_battery_soc_sensor_error = None
+            self.battery_soc = value
+            self.persist_runtime_state()
+
     def fetch_homeassistant_state(self, entity_id: str) -> dict[str, Any]:
         return self.homeassistant_api_get(f"/states/{entity_id}")
 
@@ -1112,6 +1150,7 @@ class EvccAutoMode:
                     "power_sensor_options": self.list_homeassistant_power_sensors(),
                     "power_sensor_error": self.homeassistant_power_sensor_error,
                     "battery_power_sensor_error": self.homeassistant_battery_power_sensor_error,
+                    "battery_soc_sensor_error": self.homeassistant_battery_soc_sensor_error,
                     "vehicle_soc_sensor_error": self.homeassistant_vehicle_soc_sensor_error,
                     "max_pv_sensor_error": self.max_pv_sensor_error,
                 },
@@ -1211,9 +1250,11 @@ class EvccAutoMode:
             self.homeassistant_power_sensor_cache_at = None
             self.homeassistant_power_sensor_error = None
             self.homeassistant_battery_power_sensor_error = None
+            self.homeassistant_battery_soc_sensor_error = None
             self.homeassistant_vehicle_soc_sensor_error = None
             self.last_power_sensor_poll_at = None
             self.last_battery_power_sensor_poll_at = None
+            self.last_battery_soc_poll_at = None
             self.last_vehicle_soc_poll_at = None
             self.last_inverter_input_power_poll_at = None
 
@@ -1985,6 +2026,7 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
             loadpoint_id: Number(formData.get("loadpoint_id")),
             homeassistant_power_sensor_entity_id: formData.get("homeassistant_power_sensor_entity_id"),
             homeassistant_battery_power_sensor_entity_id: formData.get("homeassistant_battery_power_sensor_entity_id"),
+            homeassistant_battery_soc_sensor_entity_id: formData.get("homeassistant_battery_soc_sensor_entity_id"),
             homeassistant_vehicle_soc_sensor_entity_id: formData.get("homeassistant_vehicle_soc_sensor_entity_id"),
             export_power_threshold_w: Number(formData.get("export_power_threshold_w")),
             import_power_threshold_w: Number(formData.get("import_power_threshold_w")),
@@ -2255,6 +2297,7 @@ def render_config_form(config: dict[str, Any]) -> str:
     max_pv_mode_enabled = "true" if config.get("max_pv_mode_enabled", False) else "false"
     selected_sensor = str(config.get("homeassistant_power_sensor_entity_id", ""))
     selected_battery_sensor = str(config.get("homeassistant_battery_power_sensor_entity_id", ""))
+    selected_battery_soc_sensor = str(config.get("homeassistant_battery_soc_sensor_entity_id", ""))
     selected_vehicle_soc_sensor = str(config.get("homeassistant_vehicle_soc_sensor_entity_id", ""))
     selected_max_pv_sensor = str(config.get("max_pv_inverter_input_power_sensor_entity_id", ""))
     sensor_options = render_power_sensor_options(
@@ -2263,6 +2306,7 @@ def render_config_form(config: dict[str, Any]) -> str:
     )
     power_sensor_error = str(config.get("power_sensor_error") or "")
     battery_power_sensor_error = str(config.get("battery_power_sensor_error") or "")
+    battery_soc_sensor_error = str(config.get("battery_soc_sensor_error") or "")
     vehicle_soc_sensor_error = str(config.get("vehicle_soc_sensor_error") or "")
     max_pv_sensor_error = str(config.get("max_pv_sensor_error") or "")
     status_messages = []
@@ -2271,6 +2315,10 @@ def render_config_form(config: dict[str, Any]) -> str:
     if battery_power_sensor_error:
         status_messages.append(
             f'<div class="status warn">Battery power sensor fallback active: {escape_html(battery_power_sensor_error)}</div>'
+        )
+    if battery_soc_sensor_error:
+        status_messages.append(
+            f'<div class="status warn">Battery SoC sensor fallback active: {escape_html(battery_soc_sensor_error)}</div>'
         )
     if vehicle_soc_sensor_error:
         status_messages.append(
@@ -2309,6 +2357,9 @@ def render_config_form(config: dict[str, Any]) -> str:
       </label>
       <label>Home Assistant Battery Power Sensor
         <input name="homeassistant_battery_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_battery_sensor)}" placeholder="sensor.battery_power">
+      </label>
+      <label>Home Assistant Battery SoC Sensor
+        <input name="homeassistant_battery_soc_sensor_entity_id" value="{escape_html(selected_battery_soc_sensor)}" placeholder="sensor.battery_soc">
       </label>
       <label>Home Assistant Vehicle SoC Sensor
         <input name="homeassistant_vehicle_soc_sensor_entity_id" value="{escape_html(selected_vehicle_soc_sensor)}" placeholder="sensor.auto_soc">

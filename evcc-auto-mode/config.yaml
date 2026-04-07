@@ -1,5 +1,5 @@
 name: evcc Auto Mode
-version: "0.3.9"
+version: "0.3.10"
 slug: evcc_auto_mode
 description: Automatically switch evcc between pv and minpv via MQTT.
 url: "https://github.com/BigT1993-dot/ha-addon/tree/main/evcc-auto-mode"
@@ -28,6 +28,7 @@ options:
   loadpoint_id: 1
   homeassistant_power_sensor_entity_id: ""
   homeassistant_battery_power_sensor_entity_id: ""
+  homeassistant_battery_soc_sensor_entity_id: ""
   homeassistant_vehicle_soc_sensor_entity_id: ""
   export_power_threshold_w: -100
   import_power_threshold_w: 100
@@ -56,6 +57,7 @@ schema:
   loadpoint_id: int(1,)
   homeassistant_power_sensor_entity_id: str?
   homeassistant_battery_power_sensor_entity_id: str?
+  homeassistant_battery_soc_sensor_entity_id: str?
   homeassistant_vehicle_soc_sensor_entity_id: str?
   export_power_threshold_w: float
   import_power_threshold_w: float
