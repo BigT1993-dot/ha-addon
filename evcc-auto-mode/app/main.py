@@ -569,9 +569,10 @@ class EvccAutoMode:
         if self.home_power is None or self.inverter_input_power is None:
             return
 
-        target_current = self.calculate_max_pv_target_current()
-        if target_current is None:
+        metrics = self.calculate_max_pv_metrics()
+        if metrics is None:
             return
+        target_current = metrics["target_current_a"]
         if self.last_min_current_command == target_current:
             return
         if self.last_min_current_command is not None and abs(self.last_min_current_command - target_current) < 1:
@@ -581,21 +582,17 @@ class EvccAutoMode:
         ):
             return
 
-        dynamic_max_power_w = min(
-            self.config.max_pv_inverter_power_w,
-            self.inverter_input_power + self.config.max_pv_battery_discharge_power_w,
-        )
         self.publish_min_current(
             target_current,
             reason=(
                 "max pv target current adjusted from "
                 f"home_power={format_threshold(self.home_power)} W, "
                 f"inverter_input_power={format_threshold(self.inverter_input_power)} W, "
-                f"dynamic_max_power={format_threshold(dynamic_max_power_w)} W"
+                f"dynamic_max_power={format_threshold(metrics['dynamic_max_power_w'])} W"
             ),
         )
 
-    def calculate_max_pv_target_current(self) -> int | None:
+    def calculate_max_pv_metrics(self) -> dict[str, float | int] | None:
         if self.home_power is None or self.inverter_input_power is None:
             return None
         dynamic_max_power_w = min(
@@ -605,7 +602,13 @@ class EvccAutoMode:
         target_power_w = max(0.0, dynamic_max_power_w - self.home_power)
         power_per_amp_w = 230 * self.config.max_pv_phases
         target_current = int(target_power_w // power_per_amp_w)
-        return max(self.config.max_pv_min_current_a, min(self.config.max_pv_max_current_a, target_current))
+        bounded_current = max(self.config.max_pv_min_current_a, min(self.config.max_pv_max_current_a, target_current))
+        return {
+            "dynamic_max_power_w": dynamic_max_power_w,
+            "target_power_w": target_power_w,
+            "target_current_a": bounded_current,
+            "phases": self.config.max_pv_phases,
+        }
 
     def update_grid_power(self, value: float, source: str) -> None:
         self.grid_power = value
@@ -957,6 +960,7 @@ class EvccAutoMode:
     def get_debug_snapshot(self) -> dict[str, Any]:
         with self.state_lock:
             now = time.monotonic()
+            max_pv_metrics = self.calculate_max_pv_metrics()
             return {
                 "generated_at": iso_utc_now(),
                 "config": {
@@ -983,6 +987,10 @@ class EvccAutoMode:
                     "battery_soc": self.battery_soc,
                     "home_power": self.home_power,
                     "inverter_input_power": self.inverter_input_power,
+                    "max_pv_dynamic_max_power_w": None if max_pv_metrics is None else max_pv_metrics["dynamic_max_power_w"],
+                    "max_pv_target_power_w": None if max_pv_metrics is None else max_pv_metrics["target_power_w"],
+                    "max_pv_target_current_a": None if max_pv_metrics is None else max_pv_metrics["target_current_a"],
+                    "max_pv_phases": None if max_pv_metrics is None else max_pv_metrics["phases"],
                     "automation_enabled": self.automation_enabled,
                     "auto_mode_active": self.auto_mode_active,
                     "last_min_current_command": self.last_min_current_command,
@@ -1273,6 +1281,11 @@ def describe_action_state(event: dict[str, Any]) -> str:
 
 
 def render_debug_html(snapshot: dict[str, Any]) -> str:
+    overview_cards = render_overview_cards(snapshot["state"])
+    compact_status = render_compact_status(snapshot["state"])
+    decision_panel = render_decision_panel(snapshot["state"])
+    max_pv_panel = render_max_pv_panel(snapshot["state"], snapshot["config"])
+    debug_state = render_state_rows(snapshot["state"])
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1282,40 +1295,97 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
   <style>
     :root {{
       color-scheme: light;
-      --bg: #f4f1ea;
+      --bg: #f3efe6;
       --panel: #fffdf8;
-      --ink: #1f2a2e;
-      --muted: #5b6a70;
-      --line: #d8d1c3;
-      --accent: #176b5a;
+      --panel-strong: #f7f1e3;
+      --ink: #182226;
+      --muted: #627277;
+      --line: #d9d2c4;
+      --accent: #0e6a56;
+      --accent-soft: #d8efe7;
       --danger: #b53131;
       --warn: #9a5b00;
+      --shadow: 0 18px 40px rgba(24, 34, 38, 0.08);
     }}
     body {{
       margin: 0;
       font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-      background: radial-gradient(circle at top, #fff7df 0, var(--bg) 45%);
+      background:
+        radial-gradient(circle at top left, #fff6da 0, transparent 32%),
+        linear-gradient(180deg, #faf4e7 0, var(--bg) 34%, #efe9db 100%);
       color: var(--ink);
     }}
     main {{
-      max-width: 1100px;
+      max-width: 1180px;
       margin: 0 auto;
-      padding: 24px;
+      padding: 18px 18px 28px;
     }}
     h1, h2 {{
       margin: 0 0 12px;
+    }}
+    h1 {{
+      font-size: 1.9rem;
+      letter-spacing: -0.03em;
+    }}
+    h2 {{
+      font-size: 1.1rem;
+    }}
+    .hero {{
+      display: grid;
+      gap: 16px;
+      grid-template-columns: 1.4fr 1fr;
+      align-items: start;
     }}
     .grid {{
       display: grid;
       gap: 16px;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     }}
+    .grid-tight {{
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    }}
     .card {{
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 16px;
+      border-radius: 18px;
       padding: 18px;
-      box-shadow: 0 10px 30px rgba(31, 42, 46, 0.06);
+      box-shadow: var(--shadow);
+    }}
+    .card.hero-card {{
+      background: linear-gradient(140deg, #fffdf6 0, #fff7ea 45%, #eef8f2 100%);
+    }}
+    .summary-card {{
+      background: var(--panel-strong);
+      border: 1px solid #ece1c6;
+      border-radius: 16px;
+      padding: 14px;
+    }}
+    .pill-row {{
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }}
+    .pill {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      border-radius: 999px;
+      background: #f1ecdf;
+      color: var(--ink);
+      font-size: 0.85rem;
+      font-weight: 600;
+    }}
+    .pill.good {{
+      background: var(--accent-soft);
+      color: #115847;
+    }}
+    .pill.warn {{
+      background: #f7e9d4;
+      color: var(--warn);
     }}
     .label {{
       color: var(--muted);
@@ -1356,9 +1426,57 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       margin-top: 16px;
       flex-wrap: wrap;
     }}
+    .tabbar {{
+      display: flex;
+      gap: 10px;
+      overflow-x: auto;
+      padding: 6px 0 2px;
+      margin: 18px 0 16px;
+      scrollbar-width: none;
+    }}
+    .tabbar::-webkit-scrollbar {{
+      display: none;
+    }}
+    .tab {{
+      white-space: nowrap;
+      border: 1px solid #d6cfbf;
+      border-radius: 999px;
+      padding: 10px 14px;
+      background: rgba(255, 255, 255, 0.75);
+      color: var(--ink);
+      font-weight: 600;
+    }}
+    .tab.is-active {{
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }}
+    .tab-panel {{
+      display: none;
+    }}
+    .tab-panel.is-active {{
+      display: block;
+    }}
     form {{
       display: grid;
       gap: 12px;
+    }}
+    .config-section {{
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+      margin-top: 4px;
+    }}
+    .config-section:first-of-type {{
+      border-top: 0;
+      padding-top: 0;
+    }}
+    .section-title {{
+      font-size: 0.82rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 10px;
     }}
     .form-grid {{
       display: grid;
@@ -1406,58 +1524,117 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
     .button-secondary {{
       background: #395761;
     }}
+    .overview-layout {{
+      display: grid;
+      gap: 16px;
+      grid-template-columns: 1.2fr 0.8fr;
+    }}
+    @media (max-width: 860px) {{
+      .hero, .overview-layout {{
+        grid-template-columns: 1fr;
+      }}
+    }}
+    @media (max-width: 640px) {{
+      main {{
+        padding: 14px 14px 22px;
+      }}
+      .card {{
+        padding: 16px;
+        border-radius: 16px;
+      }}
+      .value {{
+        font-size: 1.12rem;
+      }}
+      .actions {{
+        flex-direction: column;
+        align-items: stretch;
+      }}
+      button {{
+        width: 100%;
+      }}
+      .form-grid {{
+        grid-template-columns: 1fr;
+      }}
+      th:nth-child(3), td:nth-child(3) {{
+        display: none;
+      }}
+    }}
   </style>
 </head>
 <body>
   <main>
-    <div class="card">
-      <h1>evcc Auto Mode Debug</h1>
-      <div class="muted">Generated at {snapshot["generated_at"]}</div>
-      <div class="muted">JSON endpoint: <code>/api/state</code></div>
-      <div class="actions">
-        <button type="button" class="button-secondary" id="page-refresh">Refresh Now</button>
-        <div class="status" id="refresh-status">Auto-refresh every 5s. Pauses while editing form fields.</div>
-      </div>
-    </div>
-    <div class="grid" style="margin-top: 16px;">
-      <section class="card">
-        <h2>Current State</h2>
-        {render_state_rows(snapshot["state"])}
+    <div class="hero">
+      <section class="card hero-card">
+        <h1>evcc Auto Mode</h1>
+        <div class="muted">Mobile-first control surface for automatic `pv`, `minpv` and `Max PV` handling.</div>
+        <div class="pill-row">{compact_status}</div>
+        <div class="actions">
+          <button type="button" class="button-secondary" id="page-refresh">Refresh Now</button>
+          <div class="status" id="refresh-status">Auto-refresh every 5s. Pauses while editing form fields.</div>
+        </div>
       </section>
+      <section class="card">
+        <h2>At A Glance</h2>
+        <div class="muted">Generated at {snapshot["generated_at"]}</div>
+        <div class="grid-tight" style="margin-top: 12px;">
+          {overview_cards}
+        </div>
+      </section>
+    </div>
+    <div class="tabbar" role="tablist" aria-label="Sections">
+      <button type="button" class="tab is-active" data-tab="overview">Overview</button>
+      <button type="button" class="tab" data-tab="config">Config</button>
+      <button type="button" class="tab" data-tab="topics">Topics</button>
+      <button type="button" class="tab" data-tab="history">History</button>
+      <button type="button" class="tab" data-tab="debug">Debug</button>
+    </div>
+    <section class="tab-panel is-active" data-panel="overview">
+      <div class="overview-layout">
+        <div class="grid">
+          <section class="card">
+            <h2>Automation</h2>
+            {render_automation_controls(snapshot["state"])}
+          </section>
+          <section class="card">
+            <h2>Simulation</h2>
+            {render_simulation_controls(snapshot["state"])}
+          </section>
+          <section class="card">
+            <h2>Decision</h2>
+            {decision_panel}
+          </section>
+        </div>
+        <section class="card">
+          <h2>Max PV Debug</h2>
+          {max_pv_panel}
+        </section>
+      </div>
+    </section>
+    <section class="tab-panel" data-panel="config">
+      <section class="card">
+        <h2>Configuration</h2>
+        {render_config_form(snapshot["config"])}
+      </section>
+    </section>
+    <section class="tab-panel" data-panel="topics">
       <section class="card">
         <h2>MQTT Topics</h2>
         {render_topics_table(snapshot["topics"], snapshot["topic_values"])}
       </section>
-    </div>
-    <div class="grid" style="margin-top: 16px;">
-      <section class="card">
-        <h2>Decision Logic</h2>
-        <div class="label">Activation</div>
-        <div class="value">{escape_html(str(snapshot["state"]["last_decision_reason"]))}</div>
-        <div class="label" style="margin-top: 12px;">Restore</div>
-        <div class="value">{escape_html(str(snapshot["state"]["last_restore_reason"]))}</div>
-      </section>
-      <section class="card">
-        <h2>Automation Control</h2>
-        {render_automation_controls(snapshot["state"])}
-      </section>
-    </div>
-    <div class="grid" style="margin-top: 16px;">
-      <section class="card">
-        <h2>Config</h2>
-        {render_config_form(snapshot["config"])}
-      </section>
-      <section class="card">
-        <h2>Simulation</h2>
-        {render_simulation_controls(snapshot["state"])}
-      </section>
-    </div>
-    <div class="grid" style="margin-top: 16px;">
+    </section>
+    <section class="tab-panel" data-panel="history">
       <section class="card">
         <h2>History</h2>
         {render_history_table(snapshot["history"])}
       </section>
-    </div>
+    </section>
+    <section class="tab-panel" data-panel="debug">
+      <section class="card">
+        <h2>Debug State</h2>
+        <div class="muted">JSON endpoint: <code>/api/state</code></div>
+        {debug_state}
+      </section>
+    </section>
     <script>
       const form = document.getElementById("config-form");
       const status = document.getElementById("save-status");
@@ -1469,7 +1646,20 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       const startButton = document.getElementById("automation-start");
       const refreshButton = document.getElementById("page-refresh");
       const refreshStatus = document.getElementById("refresh-status");
+      const tabs = Array.from(document.querySelectorAll(".tab"));
+      const tabPanels = Array.from(document.querySelectorAll(".tab-panel"));
       const AUTO_REFRESH_MS = 5000;
+      function activateTab(name) {{
+        tabs.forEach((tab) => {{
+          tab.classList.toggle("is-active", tab.dataset.tab === name);
+        }});
+        tabPanels.forEach((panel) => {{
+          panel.classList.toggle("is-active", panel.dataset.panel === name);
+        }});
+      }}
+      tabs.forEach((tab) => {{
+        tab.addEventListener("click", () => activateTab(tab.dataset.tab));
+      }});
       function isEditingForm() {{
         const active = document.activeElement;
         if (!active) {{
@@ -1638,6 +1828,58 @@ def render_state_rows(state: dict[str, Any]) -> str:
     return "".join(rows)
 
 
+def render_overview_cards(state: dict[str, Any]) -> str:
+    cards = [
+        ("Mode", state.get("current_mode")),
+        ("Auto", "active" if state.get("auto_mode_active") else "idle"),
+        ("Grid", format_compact_power(state.get("grid_power"))),
+        ("Home", format_compact_power(state.get("home_power"))),
+        ("Battery", format_compact_power(state.get("battery_power"))),
+        ("Min Current", format_compact_current(state.get("last_min_current_command"))),
+    ]
+    return "".join(
+        f'<div class="summary-card"><div class="label">{escape_html(label)}</div><div class="value">{escape_html(value)}</div></div>'
+        for label, value in cards
+    )
+
+
+def render_compact_status(state: dict[str, Any]) -> str:
+    pills = [
+        ("Automation On" if state.get("automation_enabled") else "Automation Off", "good" if state.get("automation_enabled") else "warn"),
+        ("Vehicle Connected" if state.get("connected") else "Vehicle Disconnected", "good" if state.get("connected") else "warn"),
+        ("Plan Active" if state.get("plan_active") else "No Plan", "warn" if state.get("plan_active") else "good"),
+        ("What-If" if state.get("simulation_enabled") else "Live Writes", "warn" if state.get("simulation_enabled") else "good"),
+    ]
+    return "".join(
+        f'<span class="pill {css_class}">{escape_html(label)}</span>' for label, css_class in pills
+    )
+
+
+def render_decision_panel(state: dict[str, Any]) -> str:
+    return (
+        '<div class="label">Activation</div>'
+        f'<div class="value">{escape_html(str(state.get("last_decision_reason") or "n/a"))}</div>'
+        '<div class="label" style="margin-top: 14px;">Restore</div>'
+        f'<div class="value">{escape_html(str(state.get("last_restore_reason") or "n/a"))}</div>'
+    )
+
+
+def render_max_pv_panel(state: dict[str, Any], config: dict[str, Any]) -> str:
+    rows = [
+        ("Enabled", format_value(config.get("max_pv_mode_enabled"))),
+        ("Current Max Calculated", format_compact_current(state.get("max_pv_target_current_a"))),
+        ("Dynamic Max Power", format_compact_power(state.get("max_pv_dynamic_max_power_w"))),
+        ("Target Charge Power", format_compact_power(state.get("max_pv_target_power_w"))),
+        ("Phases", format_value(state.get("max_pv_phases"))),
+        ("Home Power", format_compact_power(state.get("home_power"))),
+        ("Inverter Input", format_compact_power(state.get("inverter_input_power"))),
+    ]
+    return "".join(
+        f'<div class="label">{escape_html(label)}</div><div class="value" style="margin-bottom: 10px;">{escape_html(value)}</div>'
+        for label, value in rows
+    )
+
+
 def render_topics_table(topics: dict[str, str], topic_values: dict[str, dict[str, Any]]) -> str:
     rows = []
     for label, topic in topics.items():
@@ -1689,42 +1931,60 @@ def render_config_form(config: dict[str, Any]) -> str:
     sensor_status = "".join(status_messages)
     return f"""
 <form id="config-form">
-  <div class="form-grid">
-    <label>MQTT Host<input name="mqtt_host" value="{escape_html(str(config["mqtt_host"]))}" required></label>
-    <label>MQTT Port<input name="mqtt_port" type="number" min="1" max="65535" value="{escape_html(str(config["mqtt_port"]))}" required></label>
-    <label>MQTT Username<input name="mqtt_username" value="{escape_html(str(config["mqtt_username"]))}"></label>
-    <label>MQTT Password<input name="mqtt_password" type="password" value=""></label>
-    <label>MQTT Prefix<input name="mqtt_topic_prefix" value="{escape_html(str(config["mqtt_topic_prefix"]))}" required></label>
-    <label>Loadpoint ID<input name="loadpoint_id" type="number" min="1" value="{escape_html(str(config["loadpoint_id"]))}" required></label>
-    <label>Home Assistant Power Sensor
-      <input name="homeassistant_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_sensor)}" placeholder="sensor.power_meter_wirkleistung">
-    </label>
-    <label>Home Assistant Battery Power Sensor
-      <input name="homeassistant_battery_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_battery_sensor)}" placeholder="sensor.battery_power">
-    </label>
-    <label>Max PV Inverter Input Power Sensor
-      <input name="max_pv_inverter_input_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_max_pv_sensor)}" placeholder="sensor.inverter_eingangsleistung">
-    </label>
-    <label>Export Threshold (W)<input name="export_power_threshold_w" type="number" step="1" value="{escape_html(str(config["export_power_threshold_w"]))}" required></label>
-    <label>Import Threshold (W)<input name="import_power_threshold_w" type="number" step="1" value="{escape_html(str(config["import_power_threshold_w"]))}" required></label>
-    <label>Export Delay (s)<input name="export_delay_seconds" type="number" min="1" value="{escape_html(str(config["export_delay_seconds"]))}" required></label>
-    <label>Import Delay (s)<input name="import_delay_seconds" type="number" min="1" value="{escape_html(str(config["import_delay_seconds"]))}" required></label>
-    <label>Battery Discharge Threshold (W)<input name="battery_discharge_power_threshold_w" type="number" step="1" value="{escape_html(str(config["battery_discharge_power_threshold_w"]))}" required></label>
-    <label>Battery Discharge Delay (s)<input name="battery_discharge_delay_seconds" type="number" min="1" value="{escape_html(str(config["battery_discharge_delay_seconds"]))}" required></label>
-    <label>evcc Active Threshold (A)<input name="evcc_active_current_threshold" type="number" step="0.1" min="0" value="{escape_html(str(config["evcc_active_current_threshold"]))}" required></label>
-    <label>Max PV Mode
-      <input name="max_pv_mode_enabled" list="bool-values" value="{max_pv_mode_enabled}" required>
-    </label>
-    <label>Max PV Inverter Power (W)<input name="max_pv_inverter_power_w" type="number" step="1" min="1" value="{escape_html(str(config["max_pv_inverter_power_w"]))}" required></label>
-    <label>Max PV Battery Discharge Power (W)<input name="max_pv_battery_discharge_power_w" type="number" step="1" min="1" value="{escape_html(str(config["max_pv_battery_discharge_power_w"]))}" required></label>
-    <label>Max PV Min Current (A)<input name="max_pv_min_current_a" type="number" min="1" value="{escape_html(str(config["max_pv_min_current_a"]))}" required></label>
-    <label>Max PV Max Current (A)<input name="max_pv_max_current_a" type="number" min="1" value="{escape_html(str(config["max_pv_max_current_a"]))}" required></label>
-    <label>Max PV Phases<input name="max_pv_phases" type="number" min="1" max="3" value="{escape_html(str(config["max_pv_phases"]))}" required></label>
-    <label>Max PV Control Interval (s)<input name="max_pv_control_interval_seconds" type="number" min="1" value="{escape_html(str(config["max_pv_control_interval_seconds"]))}" required></label>
-    <label>Max PV Hold Time (s)<input name="max_pv_adjustment_hold_seconds" type="number" min="1" value="{escape_html(str(config["max_pv_adjustment_hold_seconds"]))}" required></label>
-    <label>Reset Auto State On Restart
-      <input name="auto_reset_on_restart" list="bool-values" value="{auto_reset_checked}" required>
-    </label>
+  <div class="config-section">
+    <div class="section-title">Connection</div>
+    <div class="form-grid">
+      <label>MQTT Host<input name="mqtt_host" value="{escape_html(str(config["mqtt_host"]))}" required></label>
+      <label>MQTT Port<input name="mqtt_port" type="number" min="1" max="65535" value="{escape_html(str(config["mqtt_port"]))}" required></label>
+      <label>MQTT Username<input name="mqtt_username" value="{escape_html(str(config["mqtt_username"]))}"></label>
+      <label>MQTT Password<input name="mqtt_password" type="password" value=""></label>
+      <label>MQTT Prefix<input name="mqtt_topic_prefix" value="{escape_html(str(config["mqtt_topic_prefix"]))}" required></label>
+      <label>Loadpoint ID<input name="loadpoint_id" type="number" min="1" value="{escape_html(str(config["loadpoint_id"]))}" required></label>
+      <label>Reset Auto State On Restart
+        <input name="auto_reset_on_restart" list="bool-values" value="{auto_reset_checked}" required>
+      </label>
+    </div>
+  </div>
+  <div class="config-section">
+    <div class="section-title">Sensors</div>
+    <div class="form-grid">
+      <label>Home Assistant Power Sensor
+        <input name="homeassistant_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_sensor)}" placeholder="sensor.power_meter_wirkleistung">
+      </label>
+      <label>Home Assistant Battery Power Sensor
+        <input name="homeassistant_battery_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_battery_sensor)}" placeholder="sensor.battery_power">
+      </label>
+      <label>Max PV Inverter Input Power Sensor
+        <input name="max_pv_inverter_input_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_max_pv_sensor)}" placeholder="sensor.inverter_eingangsleistung">
+      </label>
+    </div>
+  </div>
+  <div class="config-section">
+    <div class="section-title">Automation Thresholds</div>
+    <div class="form-grid">
+      <label>Export Threshold (W)<input name="export_power_threshold_w" type="number" step="1" value="{escape_html(str(config["export_power_threshold_w"]))}" required></label>
+      <label>Import Threshold (W)<input name="import_power_threshold_w" type="number" step="1" value="{escape_html(str(config["import_power_threshold_w"]))}" required></label>
+      <label>Export Delay (s)<input name="export_delay_seconds" type="number" min="1" value="{escape_html(str(config["export_delay_seconds"]))}" required></label>
+      <label>Import Delay (s)<input name="import_delay_seconds" type="number" min="1" value="{escape_html(str(config["import_delay_seconds"]))}" required></label>
+      <label>Battery Discharge Threshold (W)<input name="battery_discharge_power_threshold_w" type="number" step="1" value="{escape_html(str(config["battery_discharge_power_threshold_w"]))}" required></label>
+      <label>Battery Discharge Delay (s)<input name="battery_discharge_delay_seconds" type="number" min="1" value="{escape_html(str(config["battery_discharge_delay_seconds"]))}" required></label>
+      <label>evcc Active Threshold (A)<input name="evcc_active_current_threshold" type="number" step="0.1" min="0" value="{escape_html(str(config["evcc_active_current_threshold"]))}" required></label>
+    </div>
+  </div>
+  <div class="config-section">
+    <div class="section-title">Max PV Mode</div>
+    <div class="form-grid">
+      <label>Max PV Mode
+        <input name="max_pv_mode_enabled" list="bool-values" value="{max_pv_mode_enabled}" required>
+      </label>
+      <label>Max PV Inverter Power (W)<input name="max_pv_inverter_power_w" type="number" step="1" min="1" value="{escape_html(str(config["max_pv_inverter_power_w"]))}" required></label>
+      <label>Max PV Battery Discharge Power (W)<input name="max_pv_battery_discharge_power_w" type="number" step="1" min="1" value="{escape_html(str(config["max_pv_battery_discharge_power_w"]))}" required></label>
+      <label>Max PV Min Current (A)<input name="max_pv_min_current_a" type="number" min="1" value="{escape_html(str(config["max_pv_min_current_a"]))}" required></label>
+      <label>Max PV Max Current (A)<input name="max_pv_max_current_a" type="number" min="1" value="{escape_html(str(config["max_pv_max_current_a"]))}" required></label>
+      <label>Max PV Phases<input name="max_pv_phases" type="number" min="1" max="3" value="{escape_html(str(config["max_pv_phases"]))}" required></label>
+      <label>Max PV Control Interval (s)<input name="max_pv_control_interval_seconds" type="number" min="1" value="{escape_html(str(config["max_pv_control_interval_seconds"]))}" required></label>
+      <label>Max PV Hold Time (s)<input name="max_pv_adjustment_hold_seconds" type="number" min="1" value="{escape_html(str(config["max_pv_adjustment_hold_seconds"]))}" required></label>
+    </div>
   </div>
   <datalist id="bool-values">
     <option value="true"></option>
@@ -1828,6 +2088,30 @@ def format_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+def format_compact_power(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number.is_integer():
+        return f"{int(number)} W"
+    return f"{round(number, 1)} W"
+
+
+def format_compact_current(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number.is_integer():
+        return f"{int(number)} A"
+    return f"{round(number, 1)} A"
 
 
 def format_threshold(value: float) -> str:

@@ -31,6 +31,12 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
+Neu in `0.3.0`:
+
+- Ingress-UI auf mobile Nutzung und schnellere Uebersicht umgebaut
+- neue Tabs fuer `Overview`, `Config`, `Topics`, `History` und `Debug`
+- `Max PV` zeigt jetzt berechneten Sollstrom, dynamische Leistungsgrenze und Phasen direkt in der UI
+
 Neu in `0.2.24`:
 
 - erste `Max PV Mode`-Version hinzugefuegt
