@@ -31,6 +31,12 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
+Neu in `0.2.20`:
+
+- zusaetzliche Runtime-Diagnose fuer den Home-Assistant-/Supervisor-API-Zugriff
+- Log-Ausgabe, ob relevante Env-Variablen wie `SUPERVISOR_TOKEN` vorhanden sind
+- praezisere Fehlermeldung bei fehlendem `SUPERVISOR_TOKEN`
+
 Neu in `0.2.19`:
 
 - Rueckschaltung auf `pv` jetzt auch bei dauerhaft zu hoher Batterientladung

@@ -189,6 +189,18 @@ def config_to_dict(config: AddonConfig) -> dict[str, Any]:
     }
 
 
+def collect_runtime_env_flags() -> dict[str, bool]:
+    relevant_keys = [
+        "SUPERVISOR_TOKEN",
+        "HASSIO_TOKEN",
+        "HOMEASSISTANT_TOKEN",
+        "HASSIO",
+        "HASSIO_WS",
+        "SUPERVISOR",
+    ]
+    return {key: bool(os.getenv(key)) for key in relevant_keys}
+
+
 def config_from_payload(payload: dict[str, Any]) -> AddonConfig:
     return AddonConfig(
         mqtt_host=str(payload["mqtt_host"]).strip(),
@@ -263,6 +275,10 @@ class EvccAutoMode:
         self.simulation_enabled = False
         self.last_mode_command_simulated = False
 
+        LOGGER.info(
+            "Runtime environment flags: %s",
+            json.dumps(collect_runtime_env_flags(), ensure_ascii=True, sort_keys=True),
+        )
         self._restore_runtime_state()
 
     def run(self) -> None:
@@ -581,7 +597,12 @@ class EvccAutoMode:
 
     def homeassistant_api_get(self, path: str) -> Any:
         if not self.supervisor_token:
-            raise RuntimeError("SUPERVISOR_TOKEN is not available")
+            env_flags = collect_runtime_env_flags()
+            raise RuntimeError(
+                "SUPERVISOR_TOKEN is not available; "
+                f"env_flags={json.dumps(env_flags, ensure_ascii=True, sort_keys=True)}; "
+                f"api_url={HOME_ASSISTANT_API_URL}"
+            )
 
         req = request.Request(
             f"{HOME_ASSISTANT_API_URL}{path}",
