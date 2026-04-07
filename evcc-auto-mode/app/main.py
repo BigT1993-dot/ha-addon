@@ -1422,7 +1422,7 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
     compact_status = render_compact_status(snapshot["state"])
     decision_panel = render_decision_panel(snapshot["state"])
     max_pv_panel = render_max_pv_panel(snapshot["state"], snapshot["config"])
-    max_pv_controls = render_max_pv_controls(snapshot["state"], snapshot["config"])
+    controls_panel = render_controls_panel(snapshot["state"], snapshot["config"])
     debug_state = render_state_rows(snapshot["state"])
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -1595,6 +1595,10 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
     .tab-panel.is-active {{
       display: block;
     }}
+    .tab.is-hidden,
+    .tab-panel.is-hidden {{
+      display: none !important;
+    }}
     form {{
       display: grid;
       gap: 12px;
@@ -1667,6 +1671,15 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       gap: 16px;
       grid-template-columns: 1.2fr 0.8fr;
     }}
+    .stack {{
+      display: grid;
+      gap: 16px;
+    }}
+    .decision-reason {{
+      font-size: 1.18rem;
+      font-weight: 600;
+      line-height: 1.4;
+    }}
     @media (max-width: 860px) {{
       .hero, .overview-layout {{
         grid-template-columns: 1fr;
@@ -1708,6 +1721,7 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
         <div class="pill-row">{compact_status}</div>
         <div class="actions">
           <button type="button" class="button-secondary" id="page-refresh">Refresh Now</button>
+          <button type="button" class="button-secondary" id="advanced-toggle">Show Advanced</button>
           <div class="status" id="refresh-status">Auto-refresh every 5s. Pauses while editing form fields.</div>
         </div>
       </section>
@@ -1722,24 +1736,16 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
     <div class="tabbar" role="tablist" aria-label="Sections">
       <button type="button" class="tab is-active" data-tab="overview">Overview</button>
       <button type="button" class="tab" data-tab="config">Config</button>
-      <button type="button" class="tab" data-tab="topics">Topics</button>
       <button type="button" class="tab" data-tab="history">History</button>
-      <button type="button" class="tab" data-tab="debug">Debug</button>
+      <button type="button" class="tab is-hidden" data-tab="topics" data-advanced-tab="true">Topics</button>
+      <button type="button" class="tab is-hidden" data-tab="debug" data-advanced-tab="true">Debug</button>
     </div>
     <section class="tab-panel is-active" data-panel="overview">
       <div class="overview-layout">
-        <div class="grid">
+        <div class="stack">
           <section class="card">
-            <h2>Automation</h2>
-            {render_automation_controls(snapshot["state"])}
-          </section>
-          <section class="card">
-            <h2>Max PV Mode</h2>
-            {max_pv_controls}
-          </section>
-          <section class="card">
-            <h2>Simulation</h2>
-            {render_simulation_controls(snapshot["state"])}
+            <h2>Controls</h2>
+            {controls_panel}
           </section>
           <section class="card">
             <h2>Decision</h2>
@@ -1755,10 +1761,11 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
     <section class="tab-panel" data-panel="config">
       <section class="card">
         <h2>Configuration</h2>
+        <div class="muted">Daily-use controls stay on Overview. Advanced topics and raw state can be revealed with the Advanced button.</div>
         {render_config_form(snapshot["config"])}
       </section>
     </section>
-    <section class="tab-panel" data-panel="topics">
+    <section class="tab-panel is-hidden" data-panel="topics" data-advanced-panel="true">
       <section class="card">
         <h2>MQTT Topics</h2>
         {render_topics_table(snapshot["topics"], snapshot["topic_values"])}
@@ -1770,7 +1777,7 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
         {render_history_table(snapshot["history"])}
       </section>
     </section>
-    <section class="tab-panel" data-panel="debug">
+    <section class="tab-panel is-hidden" data-panel="debug" data-advanced-panel="true">
       <section class="card">
         <h2>Debug State</h2>
         <div class="muted">JSON endpoint: <code>/api/state</code></div>
@@ -1790,14 +1797,35 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       const stopButton = document.getElementById("automation-stop");
       const startButton = document.getElementById("automation-start");
       const refreshButton = document.getElementById("page-refresh");
+      const advancedToggleButton = document.getElementById("advanced-toggle");
       const refreshStatus = document.getElementById("refresh-status");
       const tabs = Array.from(document.querySelectorAll(".tab"));
       const tabPanels = Array.from(document.querySelectorAll(".tab-panel"));
       const TAB_STORAGE_KEY = "evcc-auto-mode-active-tab";
+      const ADVANCED_STORAGE_KEY = "evcc-auto-mode-advanced-visible";
       const AUTO_REFRESH_MS = 5000;
+      function advancedTargets() {{
+        return {{
+          tabs: Array.from(document.querySelectorAll("[data-advanced-tab='true']")),
+          panels: Array.from(document.querySelectorAll("[data-advanced-panel='true']")),
+        }};
+      }}
       function getActiveTab() {{
         const activeTab = document.querySelector(".tab.is-active");
         return activeTab ? activeTab.dataset.tab : "overview";
+      }}
+      function setAdvancedVisible(visible) {{
+        const targets = advancedTargets();
+        targets.tabs.forEach((tab) => tab.classList.toggle("is-hidden", !visible));
+        targets.panels.forEach((panel) => panel.classList.toggle("is-hidden", !visible));
+        if (advancedToggleButton) {{
+          advancedToggleButton.textContent = visible ? "Hide Advanced" : "Show Advanced";
+        }}
+        window.localStorage.setItem(ADVANCED_STORAGE_KEY, visible ? "true" : "false");
+        const activeTab = getActiveTab();
+        if (!visible && (activeTab === "topics" || activeTab === "debug")) {{
+          activateTab("overview");
+        }}
       }}
       function activateTab(name) {{
         tabs.forEach((tab) => {{
@@ -1808,13 +1836,21 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
         }});
         window.localStorage.setItem(TAB_STORAGE_KEY, name);
       }}
+      const advancedVisible = window.localStorage.getItem(ADVANCED_STORAGE_KEY) === "true";
+      setAdvancedVisible(advancedVisible);
       const savedTab = window.localStorage.getItem(TAB_STORAGE_KEY);
-      if (savedTab) {{
+      if (savedTab && (advancedVisible || (savedTab !== "topics" && savedTab !== "debug"))) {{
         activateTab(savedTab);
       }}
       tabs.forEach((tab) => {{
         tab.addEventListener("click", () => activateTab(tab.dataset.tab));
       }});
+      if (advancedToggleButton) {{
+        advancedToggleButton.addEventListener("click", () => {{
+          const currentlyVisible = window.localStorage.getItem(ADVANCED_STORAGE_KEY) === "true";
+          setAdvancedVisible(!currentlyVisible);
+        }});
+      }}
       function isEditingForm() {{
         const active = document.activeElement;
         if (!active) {{
@@ -2030,13 +2066,11 @@ def render_state_rows(state: dict[str, Any]) -> str:
 def render_overview_cards(state: dict[str, Any]) -> str:
     cards = [
         ("Mode", state.get("current_mode")),
-        ("Auto", "active" if state.get("auto_mode_active") else "idle"),
         ("Car SoC", format_compact_percent(state.get("vehicle_soc"))),
         ("Grid", format_compact_power(state.get("grid_power"))),
         ("Home", format_compact_power(state.get("home_power"))),
         ("Battery SoC", format_compact_percent(state.get("battery_soc"))),
-        ("Battery Power", format_compact_power(state.get("battery_power"))),
-        ("Min Current", format_compact_current(state.get("last_min_current_command"))),
+        ("Max PV Current", format_compact_current(state.get("max_pv_target_current_a"))),
     ]
     return "".join(
         f'<div class="summary-card"><div class="label">{escape_html(label)}</div><div class="value">{escape_html(value)}</div></div>'
@@ -2057,11 +2091,14 @@ def render_compact_status(state: dict[str, Any]) -> str:
 
 
 def render_decision_panel(state: dict[str, Any]) -> str:
+    primary_reason = (
+        state.get("last_restore_reason")
+        if state.get("last_restore_reason") and not state.get("auto_mode_active")
+        else state.get("last_decision_reason") or state.get("last_restore_reason") or "n/a"
+    )
     return (
-        '<div class="label">Activation</div>'
-        f'<div class="value">{escape_html(str(state.get("last_decision_reason") or "n/a"))}</div>'
-        '<div class="label" style="margin-top: 14px;">Restore</div>'
-        f'<div class="value">{escape_html(str(state.get("last_restore_reason") or "n/a"))}</div>'
+        '<div class="label">Current Reason</div>'
+        f'<div class="decision-reason">{escape_html(str(primary_reason))}</div>'
     )
 
 
@@ -2277,6 +2314,19 @@ def render_max_pv_controls(state: dict[str, Any], config: dict[str, Any]) -> str
   <div class="status" id="max-pv-status">Main shortcut for Max PV on the overview screen.</div>
 </div>
 """
+
+
+def render_controls_panel(state: dict[str, Any], config: dict[str, Any]) -> str:
+    automation = render_automation_controls(state)
+    simulation = render_simulation_controls(state)
+    max_pv = render_max_pv_controls(state, config)
+    return (
+        '<div class="stack">'
+        f'<div>{automation}</div>'
+        f'<div>{simulation}</div>'
+        f'<div>{max_pv}</div>'
+        "</div>"
+    )
 
 
 def render_history_table(history: list[dict[str, Any]]) -> str:
