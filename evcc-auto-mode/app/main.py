@@ -1648,7 +1648,12 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       const refreshStatus = document.getElementById("refresh-status");
       const tabs = Array.from(document.querySelectorAll(".tab"));
       const tabPanels = Array.from(document.querySelectorAll(".tab-panel"));
+      const TAB_STORAGE_KEY = "evcc-auto-mode-active-tab";
       const AUTO_REFRESH_MS = 5000;
+      function getActiveTab() {{
+        const activeTab = document.querySelector(".tab.is-active");
+        return activeTab ? activeTab.dataset.tab : "overview";
+      }}
       function activateTab(name) {{
         tabs.forEach((tab) => {{
           tab.classList.toggle("is-active", tab.dataset.tab === name);
@@ -1656,6 +1661,11 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
         tabPanels.forEach((panel) => {{
           panel.classList.toggle("is-active", panel.dataset.panel === name);
         }});
+        window.localStorage.setItem(TAB_STORAGE_KEY, name);
+      }}
+      const savedTab = window.localStorage.getItem(TAB_STORAGE_KEY);
+      if (savedTab) {{
+        activateTab(savedTab);
       }}
       tabs.forEach((tab) => {{
         tab.addEventListener("click", () => activateTab(tab.dataset.tab));
@@ -1801,6 +1811,13 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
         refreshButton.addEventListener("click", refreshPageNow);
       }}
       window.setInterval(() => {{
+        const activeTab = getActiveTab();
+        if (activeTab !== "overview") {{
+          if (refreshStatus) {{
+            refreshStatus.textContent = "Auto-refresh active only on Overview.";
+          }}
+          return;
+        }}
         if (isEditingForm()) {{
           if (refreshStatus) {{
             refreshStatus.textContent = "Auto-refresh paused while editing form fields.";
