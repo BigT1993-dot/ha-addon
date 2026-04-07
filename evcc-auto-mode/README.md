@@ -31,6 +31,13 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
+Neu in `0.2.24`:
+
+- erste `Max PV Mode`-Version hinzugefuegt
+- regelt in `minpv` den `minCurrent` ueber `evcc/loadpoints/<id>/minCurrent/set`
+- nutzt `evcc/site/homePower`, einen konfigurierbaren HA-Sensor fuer Inverter-Eingangsleistung und eine konfigurierbare Batterie-Entladegrenze
+- Zielgrenze: `min(max_pv_inverter_power_w, inverter_input_power_w + max_pv_battery_discharge_power_w) - home_power_w`
+
 Neu in `0.2.23`:
 
 - Export- und Import-Schwellen unterstuetzen jetzt ebenfalls positive und negative Vorzeichen

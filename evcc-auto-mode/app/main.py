@@ -51,6 +51,15 @@ class AddonConfig:
     battery_discharge_power_threshold_w: float
     battery_discharge_delay_seconds: int
     evcc_active_current_threshold: float
+    max_pv_mode_enabled: bool
+    max_pv_inverter_input_power_sensor_entity_id: str
+    max_pv_inverter_power_w: float
+    max_pv_battery_discharge_power_w: float
+    max_pv_min_current_a: int
+    max_pv_max_current_a: int
+    max_pv_phases: int
+    max_pv_control_interval_seconds: int
+    max_pv_adjustment_hold_seconds: int
     auto_reset_on_restart: bool
 
     @property
@@ -64,9 +73,11 @@ class AddonConfig:
             "battery_power": f"{self.mqtt_topic_prefix}/site/batteryPower",
             "buffer_soc": f"{self.mqtt_topic_prefix}/site/bufferSoc",
             "battery_soc": f"{self.mqtt_topic_prefix}/site/batterySoc",
+            "home_power": f"{self.mqtt_topic_prefix}/site/homePower",
             "connected": f"{self.loadpoint_prefix}/connected",
             "mode": f"{self.loadpoint_prefix}/mode",
             "mode_set": f"{self.loadpoint_prefix}/mode/set",
+            "min_current_set": f"{self.loadpoint_prefix}/minCurrent/set",
             "offered_current": f"{self.loadpoint_prefix}/offeredCurrent",
             "plan_active": f"{self.loadpoint_prefix}/planActive",
         }
@@ -136,6 +147,17 @@ def read_config() -> AddonConfig:
         battery_discharge_power_threshold_w=float(raw.get("battery_discharge_power_threshold_w", 200.0)),
         battery_discharge_delay_seconds=int(raw.get("battery_discharge_delay_seconds", 60)),
         evcc_active_current_threshold=float(raw.get("evcc_active_current_threshold", 6.0)),
+        max_pv_mode_enabled=parse_config_bool(raw.get("max_pv_mode_enabled", False)),
+        max_pv_inverter_input_power_sensor_entity_id=str(
+            raw.get("max_pv_inverter_input_power_sensor_entity_id", "") or ""
+        ).strip(),
+        max_pv_inverter_power_w=float(raw.get("max_pv_inverter_power_w", 8500.0)),
+        max_pv_battery_discharge_power_w=float(raw.get("max_pv_battery_discharge_power_w", 4900.0)),
+        max_pv_min_current_a=int(raw.get("max_pv_min_current_a", 6)),
+        max_pv_max_current_a=int(raw.get("max_pv_max_current_a", 16)),
+        max_pv_phases=int(raw.get("max_pv_phases", 3)),
+        max_pv_control_interval_seconds=int(raw.get("max_pv_control_interval_seconds", 10)),
+        max_pv_adjustment_hold_seconds=int(raw.get("max_pv_adjustment_hold_seconds", 30)),
         auto_reset_on_restart=parse_config_bool(raw.get("auto_reset_on_restart", True)),
     )
 
@@ -185,6 +207,15 @@ def config_to_dict(config: AddonConfig) -> dict[str, Any]:
         "battery_discharge_power_threshold_w": config.battery_discharge_power_threshold_w,
         "battery_discharge_delay_seconds": config.battery_discharge_delay_seconds,
         "evcc_active_current_threshold": config.evcc_active_current_threshold,
+        "max_pv_mode_enabled": config.max_pv_mode_enabled,
+        "max_pv_inverter_input_power_sensor_entity_id": config.max_pv_inverter_input_power_sensor_entity_id,
+        "max_pv_inverter_power_w": config.max_pv_inverter_power_w,
+        "max_pv_battery_discharge_power_w": config.max_pv_battery_discharge_power_w,
+        "max_pv_min_current_a": config.max_pv_min_current_a,
+        "max_pv_max_current_a": config.max_pv_max_current_a,
+        "max_pv_phases": config.max_pv_phases,
+        "max_pv_control_interval_seconds": config.max_pv_control_interval_seconds,
+        "max_pv_adjustment_hold_seconds": config.max_pv_adjustment_hold_seconds,
         "auto_reset_on_restart": config.auto_reset_on_restart,
     }
 
@@ -220,6 +251,17 @@ def config_from_payload(payload: dict[str, Any]) -> AddonConfig:
         battery_discharge_power_threshold_w=float(payload.get("battery_discharge_power_threshold_w", 200.0)),
         battery_discharge_delay_seconds=int(payload.get("battery_discharge_delay_seconds", 60)),
         evcc_active_current_threshold=float(payload.get("evcc_active_current_threshold", 6.0)),
+        max_pv_mode_enabled=parse_config_bool(payload.get("max_pv_mode_enabled", False)),
+        max_pv_inverter_input_power_sensor_entity_id=str(
+            payload.get("max_pv_inverter_input_power_sensor_entity_id", "") or ""
+        ).strip(),
+        max_pv_inverter_power_w=float(payload.get("max_pv_inverter_power_w", 8500.0)),
+        max_pv_battery_discharge_power_w=float(payload.get("max_pv_battery_discharge_power_w", 4900.0)),
+        max_pv_min_current_a=int(payload.get("max_pv_min_current_a", 6)),
+        max_pv_max_current_a=int(payload.get("max_pv_max_current_a", 16)),
+        max_pv_phases=int(payload.get("max_pv_phases", 3)),
+        max_pv_control_interval_seconds=int(payload.get("max_pv_control_interval_seconds", 10)),
+        max_pv_adjustment_hold_seconds=int(payload.get("max_pv_adjustment_hold_seconds", 30)),
         auto_reset_on_restart=parse_config_bool(payload.get("auto_reset_on_restart", True)),
     )
 
@@ -252,6 +294,8 @@ class EvccAutoMode:
         self.mqtt_battery_power_updated_at: float | None = None
         self.buffer_soc: float | None = None
         self.battery_soc: float | None = None
+        self.home_power: float | None = None
+        self.inverter_input_power: float | None = None
         self.auto_mode_active = False
         self.automation_enabled = True
         self.export_timer_started_at: float | None = None
@@ -272,8 +316,13 @@ class EvccAutoMode:
         self.homeassistant_battery_power_sensor_error: str | None = None
         self.last_power_sensor_poll_at: float | None = None
         self.last_battery_power_sensor_poll_at: float | None = None
+        self.last_inverter_input_power_poll_at: float | None = None
         self.simulation_enabled = False
         self.last_mode_command_simulated = False
+        self.last_min_current_command: int | None = None
+        self.last_min_current_command_at: float | None = None
+        self.max_pv_sensor_error: str | None = None
+        self.last_max_pv_control_at: float | None = None
 
         LOGGER.info(
             "Runtime environment flags: %s",
@@ -292,6 +341,7 @@ class EvccAutoMode:
             while not self.shutdown_event.wait(1):
                 self.refresh_grid_power_source()
                 self.refresh_battery_power_source()
+                self.refresh_max_pv_inverter_input_power()
                 self.evaluate()
         finally:
             server.stop()
@@ -348,6 +398,7 @@ class EvccAutoMode:
                             )
                         if payload != "minpv" and self.auto_mode_active:
                             LOGGER.info("Mode changed externally to %s; clearing auto flag", payload)
+                            self.reset_max_pv_min_current(reason=f"evcc mode changed externally to {payload}")
                             self.set_auto_mode_active(False, reason=f"evcc mode changed externally to {payload}", source="mqtt")
                 elif msg.topic == topics["offered_current"]:
                     self.offered_current = parse_float(payload)
@@ -364,6 +415,8 @@ class EvccAutoMode:
                     self.buffer_soc = parse_optional_float(payload)
                 elif msg.topic == topics["battery_soc"]:
                     self.battery_soc = parse_optional_float(payload)
+                elif msg.topic == topics["home_power"]:
+                    self.home_power = parse_float(payload)
             except ValueError:
                 LOGGER.warning("Ignored invalid payload for %s: %r", msg.topic, payload)
                 return
@@ -391,6 +444,7 @@ class EvccAutoMode:
 
             if not self.connected and self.auto_mode_active:
                 LOGGER.info("Vehicle disconnected; clearing auto mode state")
+                self.reset_max_pv_min_current(reason="vehicle disconnected")
                 self.set_auto_mode_active(False, reason="vehicle disconnected", source="automation")
 
             if not self.automation_enabled:
@@ -408,7 +462,11 @@ class EvccAutoMode:
             self.last_restore_reason = restore_reason
             if should_restore_pv:
                 self.publish_mode("pv", reason=restore_reason)
+                self.reset_max_pv_min_current(reason=f"restored pv: {restore_reason}")
                 self.set_auto_mode_active(False, reason=f"restored pv: {restore_reason}", source="automation")
+                return
+
+            self.maybe_control_max_pv(now)
 
     def should_set_minpv(self, now: float) -> tuple[bool, str]:
         blockers: list[str] = []
@@ -490,6 +548,65 @@ class EvccAutoMode:
 
         return False, "; ".join(blockers)
 
+    def maybe_control_max_pv(self, now: float) -> None:
+        if not self.config.max_pv_mode_enabled:
+            return
+        if self.last_max_pv_control_at is not None and (
+            now - self.last_max_pv_control_at < self.config.max_pv_control_interval_seconds
+        ):
+            return
+        self.last_max_pv_control_at = now
+
+        if not self.auto_mode_active or self.current_mode != "minpv":
+            return
+        if not self.connected or self.plan_active:
+            return
+        if self.battery_soc is None or self.buffer_soc is None:
+            return
+        if self.battery_soc >= self.buffer_soc:
+            self.reset_max_pv_min_current(reason="battery SoC is not below buffer SoC")
+            return
+        if self.home_power is None or self.inverter_input_power is None:
+            return
+
+        target_current = self.calculate_max_pv_target_current()
+        if target_current is None:
+            return
+        if self.last_min_current_command == target_current:
+            return
+        if self.last_min_current_command is not None and abs(self.last_min_current_command - target_current) < 1:
+            return
+        if self.last_min_current_command_at is not None and (
+            now - self.last_min_current_command_at < self.config.max_pv_adjustment_hold_seconds
+        ):
+            return
+
+        dynamic_max_power_w = min(
+            self.config.max_pv_inverter_power_w,
+            self.inverter_input_power + self.config.max_pv_battery_discharge_power_w,
+        )
+        self.publish_min_current(
+            target_current,
+            reason=(
+                "max pv target current adjusted from "
+                f"home_power={format_threshold(self.home_power)} W, "
+                f"inverter_input_power={format_threshold(self.inverter_input_power)} W, "
+                f"dynamic_max_power={format_threshold(dynamic_max_power_w)} W"
+            ),
+        )
+
+    def calculate_max_pv_target_current(self) -> int | None:
+        if self.home_power is None or self.inverter_input_power is None:
+            return None
+        dynamic_max_power_w = min(
+            self.config.max_pv_inverter_power_w,
+            self.inverter_input_power + self.config.max_pv_battery_discharge_power_w,
+        )
+        target_power_w = max(0.0, dynamic_max_power_w - self.home_power)
+        power_per_amp_w = 230 * self.config.max_pv_phases
+        target_current = int(target_power_w // power_per_amp_w)
+        return max(self.config.max_pv_min_current_a, min(self.config.max_pv_max_current_a, target_current))
+
     def update_grid_power(self, value: float, source: str) -> None:
         self.grid_power = value
         self.grid_power_source = source
@@ -499,6 +616,49 @@ class EvccAutoMode:
         self.battery_power = value
         self.battery_power_source = source
         self.battery_power_updated_at = observed_at if observed_at is not None else time.monotonic()
+
+    def publish_min_current(self, current: int, reason: str, source: str = "max_pv_mode") -> None:
+        topic = self.config.topics["min_current_set"]
+        LOGGER.info("Publishing minCurrent %s to %s", current, topic)
+        self.last_min_current_command = current
+        self.last_min_current_command_at = time.monotonic()
+        if self.simulation_enabled:
+            self.record_event(
+                "min_current_command_simulated",
+                f"Would publish minCurrent {current}",
+                reason=reason,
+                details={"topic": topic, "current": current, "source": source, "simulated": True},
+            )
+            return
+        result = self.client.publish(topic, payload=str(current), qos=1, retain=False)
+        event_details = {
+            "topic": topic,
+            "current": current,
+            "source": source,
+            "result_code": result.rc,
+        }
+        if result.rc != mqtt.MQTT_ERR_SUCCESS:
+            LOGGER.error("Failed publishing minCurrent %s: rc=%s", current, result.rc)
+            self.record_event(
+                "min_current_command_failed",
+                f"Failed to publish minCurrent {current}",
+                reason=reason,
+                details=event_details,
+            )
+            return
+        self.record_event(
+            "min_current_command",
+            f"Published minCurrent {current}",
+            reason=reason,
+            details=event_details,
+        )
+
+    def reset_max_pv_min_current(self, reason: str) -> None:
+        if not self.config.max_pv_mode_enabled:
+            return
+        if self.last_min_current_command == self.config.max_pv_min_current_a:
+            return
+        self.publish_min_current(self.config.max_pv_min_current_a, reason=reason, source="max_pv_reset")
 
     def is_grid_power_fresh(self, now: float) -> bool:
         return self.grid_power_updated_at is not None and now - self.grid_power_updated_at <= POWER_SENSOR_POLL_INTERVAL_SECONDS * 3
@@ -580,6 +740,31 @@ class EvccAutoMode:
         with self.state_lock:
             self.homeassistant_battery_power_sensor_error = None
             self.update_battery_power(value, source=f"homeassistant:{entity_id}")
+
+    def refresh_max_pv_inverter_input_power(self) -> None:
+        entity_id = self.config.max_pv_inverter_input_power_sensor_entity_id
+        if not entity_id:
+            return
+
+        now = time.monotonic()
+        if (
+            self.last_inverter_input_power_poll_at is not None
+            and now - self.last_inverter_input_power_poll_at < POWER_SENSOR_POLL_INTERVAL_SECONDS
+        ):
+            return
+        self.last_inverter_input_power_poll_at = now
+
+        try:
+            state = self.fetch_homeassistant_state(entity_id)
+            value = parse_float(str(state["state"]))
+        except Exception as err:
+            self.max_pv_sensor_error = str(err)
+            LOGGER.exception("Failed to refresh Max PV inverter input power sensor %s", entity_id)
+            return
+
+        with self.state_lock:
+            self.max_pv_sensor_error = None
+            self.inverter_input_power = value
 
     def fetch_homeassistant_state(self, entity_id: str) -> dict[str, Any]:
         return self.homeassistant_api_get(f"/states/{entity_id}")
@@ -736,6 +921,7 @@ class EvccAutoMode:
 
             self.automation_enabled = enabled
             if not enabled:
+                self.reset_max_pv_min_current(reason=reason)
                 self.auto_mode_active = False
                 self.last_decision_reason = "automation stopped by user"
                 self.last_restore_reason = "automation stopped by user"
@@ -779,6 +965,7 @@ class EvccAutoMode:
                     "power_sensor_options": self.list_homeassistant_power_sensors(),
                     "power_sensor_error": self.homeassistant_power_sensor_error,
                     "battery_power_sensor_error": self.homeassistant_battery_power_sensor_error,
+                    "max_pv_sensor_error": self.max_pv_sensor_error,
                 },
                 "topics": self.config.topics,
                 "state": {
@@ -794,8 +981,11 @@ class EvccAutoMode:
                     "battery_power_source": self.battery_power_source,
                     "buffer_soc": self.buffer_soc,
                     "battery_soc": self.battery_soc,
+                    "home_power": self.home_power,
+                    "inverter_input_power": self.inverter_input_power,
                     "automation_enabled": self.automation_enabled,
                     "auto_mode_active": self.auto_mode_active,
+                    "last_min_current_command": self.last_min_current_command,
                     "last_decision_reason": self.last_decision_reason,
                     "last_restore_reason": self.last_restore_reason,
                     "last_mode_command": self.last_mode_command,
@@ -803,6 +993,7 @@ class EvccAutoMode:
                     "last_mqtt_message_age_seconds": elapsed_seconds(self.last_mqtt_message_at, now),
                     "grid_power_age_seconds": elapsed_seconds(self.grid_power_updated_at, now),
                     "battery_power_age_seconds": elapsed_seconds(self.battery_power_updated_at, now),
+                    "last_min_current_command_age_seconds": elapsed_seconds(self.last_min_current_command_at, now),
                     "last_mode_command_age_seconds": elapsed_seconds(self.last_mode_command_at, now),
                     "export_timer_age_seconds": elapsed_seconds(self.export_timer_started_at, now),
                     "import_timer_age_seconds": elapsed_seconds(self.import_timer_started_at, now),
@@ -852,12 +1043,19 @@ class EvccAutoMode:
             self.plan_active = False
             self.buffer_soc = None
             self.battery_soc = None
+            self.home_power = None
+            self.inverter_input_power = None
             self.auto_mode_active = False
+            self.last_min_current_command = None
+            self.last_min_current_command_at = None
+            self.max_pv_sensor_error = None
+            self.last_max_pv_control_at = None
             self.homeassistant_power_sensor_cache_at = None
             self.homeassistant_power_sensor_error = None
             self.homeassistant_battery_power_sensor_error = None
             self.last_power_sensor_poll_at = None
             self.last_battery_power_sensor_poll_at = None
+            self.last_inverter_input_power_poll_at = None
 
         write_runtime_config(next_config)
         self.record_event(
@@ -1303,6 +1501,15 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
             battery_discharge_power_threshold_w: Number(formData.get("battery_discharge_power_threshold_w")),
             battery_discharge_delay_seconds: Number(formData.get("battery_discharge_delay_seconds")),
             evcc_active_current_threshold: Number(formData.get("evcc_active_current_threshold")),
+            max_pv_mode_enabled: formData.get("max_pv_mode_enabled") === "true",
+            max_pv_inverter_input_power_sensor_entity_id: formData.get("max_pv_inverter_input_power_sensor_entity_id"),
+            max_pv_inverter_power_w: Number(formData.get("max_pv_inverter_power_w")),
+            max_pv_battery_discharge_power_w: Number(formData.get("max_pv_battery_discharge_power_w")),
+            max_pv_min_current_a: Number(formData.get("max_pv_min_current_a")),
+            max_pv_max_current_a: Number(formData.get("max_pv_max_current_a")),
+            max_pv_phases: Number(formData.get("max_pv_phases")),
+            max_pv_control_interval_seconds: Number(formData.get("max_pv_control_interval_seconds")),
+            max_pv_adjustment_hold_seconds: Number(formData.get("max_pv_adjustment_hold_seconds")),
             auto_reset_on_restart: formData.get("auto_reset_on_restart") === "true",
           }};
           try {{
@@ -1453,20 +1660,27 @@ def render_topics_table(topics: dict[str, str], topic_values: dict[str, dict[str
 
 def render_config_form(config: dict[str, Any]) -> str:
     auto_reset_checked = "true" if config["auto_reset_on_restart"] else "false"
+    max_pv_mode_enabled = "true" if config.get("max_pv_mode_enabled", False) else "false"
     selected_sensor = str(config.get("homeassistant_power_sensor_entity_id", ""))
     selected_battery_sensor = str(config.get("homeassistant_battery_power_sensor_entity_id", ""))
+    selected_max_pv_sensor = str(config.get("max_pv_inverter_input_power_sensor_entity_id", ""))
     sensor_options = render_power_sensor_options(
         selected_sensor,
         config.get("power_sensor_options", []),
     )
     power_sensor_error = str(config.get("power_sensor_error") or "")
     battery_power_sensor_error = str(config.get("battery_power_sensor_error") or "")
+    max_pv_sensor_error = str(config.get("max_pv_sensor_error") or "")
     status_messages = []
     if power_sensor_error:
         status_messages.append(f'<div class="status warn">Grid sensor list unavailable: {escape_html(power_sensor_error)}</div>')
     if battery_power_sensor_error:
         status_messages.append(
             f'<div class="status warn">Battery power sensor fallback active: {escape_html(battery_power_sensor_error)}</div>'
+        )
+    if max_pv_sensor_error:
+        status_messages.append(
+            f'<div class="status warn">Max PV inverter input sensor unavailable: {escape_html(max_pv_sensor_error)}</div>'
         )
     if not status_messages:
         status_messages.append(
@@ -1488,6 +1702,9 @@ def render_config_form(config: dict[str, Any]) -> str:
     <label>Home Assistant Battery Power Sensor
       <input name="homeassistant_battery_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_battery_sensor)}" placeholder="sensor.battery_power">
     </label>
+    <label>Max PV Inverter Input Power Sensor
+      <input name="max_pv_inverter_input_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_max_pv_sensor)}" placeholder="sensor.inverter_eingangsleistung">
+    </label>
     <label>Export Threshold (W)<input name="export_power_threshold_w" type="number" step="1" value="{escape_html(str(config["export_power_threshold_w"]))}" required></label>
     <label>Import Threshold (W)<input name="import_power_threshold_w" type="number" step="1" value="{escape_html(str(config["import_power_threshold_w"]))}" required></label>
     <label>Export Delay (s)<input name="export_delay_seconds" type="number" min="1" value="{escape_html(str(config["export_delay_seconds"]))}" required></label>
@@ -1495,6 +1712,16 @@ def render_config_form(config: dict[str, Any]) -> str:
     <label>Battery Discharge Threshold (W)<input name="battery_discharge_power_threshold_w" type="number" step="1" value="{escape_html(str(config["battery_discharge_power_threshold_w"]))}" required></label>
     <label>Battery Discharge Delay (s)<input name="battery_discharge_delay_seconds" type="number" min="1" value="{escape_html(str(config["battery_discharge_delay_seconds"]))}" required></label>
     <label>evcc Active Threshold (A)<input name="evcc_active_current_threshold" type="number" step="0.1" min="0" value="{escape_html(str(config["evcc_active_current_threshold"]))}" required></label>
+    <label>Max PV Mode
+      <input name="max_pv_mode_enabled" list="bool-values" value="{max_pv_mode_enabled}" required>
+    </label>
+    <label>Max PV Inverter Power (W)<input name="max_pv_inverter_power_w" type="number" step="1" min="1" value="{escape_html(str(config["max_pv_inverter_power_w"]))}" required></label>
+    <label>Max PV Battery Discharge Power (W)<input name="max_pv_battery_discharge_power_w" type="number" step="1" min="1" value="{escape_html(str(config["max_pv_battery_discharge_power_w"]))}" required></label>
+    <label>Max PV Min Current (A)<input name="max_pv_min_current_a" type="number" min="1" value="{escape_html(str(config["max_pv_min_current_a"]))}" required></label>
+    <label>Max PV Max Current (A)<input name="max_pv_max_current_a" type="number" min="1" value="{escape_html(str(config["max_pv_max_current_a"]))}" required></label>
+    <label>Max PV Phases<input name="max_pv_phases" type="number" min="1" max="3" value="{escape_html(str(config["max_pv_phases"]))}" required></label>
+    <label>Max PV Control Interval (s)<input name="max_pv_control_interval_seconds" type="number" min="1" value="{escape_html(str(config["max_pv_control_interval_seconds"]))}" required></label>
+    <label>Max PV Hold Time (s)<input name="max_pv_adjustment_hold_seconds" type="number" min="1" value="{escape_html(str(config["max_pv_adjustment_hold_seconds"]))}" required></label>
     <label>Reset Auto State On Restart
       <input name="auto_reset_on_restart" list="bool-values" value="{auto_reset_checked}" required>
     </label>
@@ -1662,6 +1889,20 @@ def validate_config(config: AddonConfig) -> None:
         raise ValueError("battery_discharge_delay_seconds must be >= 1")
     if config.evcc_active_current_threshold < 0:
         raise ValueError("evcc_active_current_threshold must be >= 0")
+    if config.max_pv_inverter_power_w <= 0:
+        raise ValueError("max_pv_inverter_power_w must be > 0")
+    if config.max_pv_battery_discharge_power_w <= 0:
+        raise ValueError("max_pv_battery_discharge_power_w must be > 0")
+    if config.max_pv_min_current_a < 1:
+        raise ValueError("max_pv_min_current_a must be >= 1")
+    if config.max_pv_max_current_a < config.max_pv_min_current_a:
+        raise ValueError("max_pv_max_current_a must be >= max_pv_min_current_a")
+    if config.max_pv_phases < 1 or config.max_pv_phases > 3:
+        raise ValueError("max_pv_phases must be between 1 and 3")
+    if config.max_pv_control_interval_seconds < 1:
+        raise ValueError("max_pv_control_interval_seconds must be >= 1")
+    if config.max_pv_adjustment_hold_seconds < 1:
+        raise ValueError("max_pv_adjustment_hold_seconds must be >= 1")
 
 
 def main() -> int:
