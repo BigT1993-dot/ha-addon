@@ -1683,6 +1683,38 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       font-weight: 600;
       line-height: 1.4;
     }}
+    .controls-stack {{
+      display: grid;
+      gap: 12px;
+    }}
+    .control-tile {{
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      background: #faf6ed;
+    }}
+    .control-head {{
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }}
+    .control-title {{
+      font-size: 0.92rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }}
+    .control-meta {{
+      font-size: 0.85rem;
+      color: var(--muted);
+    }}
+    .control-actions {{
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }}
     @media (max-width: 860px) {{
       .hero, .overview-layout {{
         grid-template-columns: 1fr;
@@ -1700,6 +1732,11 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
         font-size: 1.12rem;
       }}
       .actions {{
+        flex-direction: column;
+        align-items: stretch;
+      }}
+      .control-head,
+      .control-actions {{
         flex-direction: column;
         align-items: stretch;
       }}
@@ -2267,22 +2304,24 @@ def render_power_sensor_options(selected_entity_id: str, options: list[dict[str,
 
 def render_automation_controls(state: dict[str, Any]) -> str:
     enabled = bool(state["automation_enabled"])
-    automation_text = "running" if enabled else "stopped"
     button_class = "button-success" if enabled else "button-danger"
     button_label = "Automation Active" if enabled else "Automation Disabled"
     return f"""
-<div class="label">Automation State</div>
-<div class="value">{escape_html(automation_text)}</div>
-<div class="actions">
-  <button type="button" class="{button_class}" id="automation-toggle" data-enabled="{str(enabled).lower()}">{escape_html(button_label)}</button>
-  <div class="status" id="automation-status">Stop clears the add-on's automation ownership and prevents further MQTT writes until restarted.</div>
+<div class="control-tile">
+  <div class="control-head">
+    <div class="control-title">Automation</div>
+    <div class="control-meta">{escape_html("running" if enabled else "stopped")}</div>
+  </div>
+  <div class="control-actions">
+    <button type="button" class="{button_class}" id="automation-toggle" data-enabled="{str(enabled).lower()}">{escape_html(button_label)}</button>
+    <div class="status" id="automation-status">Live control.</div>
+  </div>
 </div>
 """
 
 
 def render_simulation_controls(state: dict[str, Any]) -> str:
     enabled = bool(state["simulation_enabled"])
-    simulation_text = "what-if active" if enabled else "live writes active"
     button_class = "button-success" if enabled else "button-danger"
     button_label = "What-If Active" if enabled else "What-If Disabled"
     last_command = "none"
@@ -2290,31 +2329,34 @@ def render_simulation_controls(state: dict[str, Any]) -> str:
         suffix = " (simulated)" if state.get("last_mode_command_simulated") else ""
         last_command = f'{state["last_mode_command"]}{suffix}'
     return f"""
-<div class="label">Write Mode</div>
-<div class="value">{escape_html(simulation_text)}</div>
-<div class="label" style="margin-top: 12px;">Last Command</div>
-<div class="value">{escape_html(last_command)}</div>
-<div class="actions">
-  <button type="button" class="{button_class}" id="simulation-toggle" data-enabled="{str(enabled).lower()}">{escape_html(button_label)}</button>
-  <div class="status" id="simulation-status">What-if uses the real incoming values and shows what the add-on would write, but suppresses the actual MQTT mode command.</div>
+<div class="control-tile">
+  <div class="control-head">
+    <div class="control-title">What-If</div>
+    <div class="control-meta">{escape_html(last_command)}</div>
+  </div>
+  <div class="control-actions">
+    <button type="button" class="{button_class}" id="simulation-toggle" data-enabled="{str(enabled).lower()}">{escape_html(button_label)}</button>
+    <div class="status" id="simulation-status">Preview only.</div>
+  </div>
 </div>
 """
 
 
 def render_max_pv_controls(state: dict[str, Any], config: dict[str, Any]) -> str:
     enabled = bool(config.get("max_pv_mode_enabled"))
-    status = "max pv active" if enabled else "max pv off"
     calculated = format_compact_current(state.get("max_pv_target_current_a"))
     button_class = "button-success" if enabled else "button-danger"
     button_label = "Max PV Active" if enabled else "Max PV Disabled"
     return f"""
-<div class="label">Status</div>
-<div class="value">{escape_html(status)}</div>
-<div class="label" style="margin-top: 12px;">Current Max Calculated</div>
-<div class="value">{escape_html(calculated)}</div>
-<div class="actions">
-  <button type="button" class="{button_class}" id="max-pv-toggle" data-enabled="{str(enabled).lower()}">{escape_html(button_label)}</button>
-  <div class="status" id="max-pv-status">Main shortcut for Max PV on the overview screen.</div>
+<div class="control-tile">
+  <div class="control-head">
+    <div class="control-title">Max PV</div>
+    <div class="control-meta">{escape_html(calculated)}</div>
+  </div>
+  <div class="control-actions">
+    <button type="button" class="{button_class}" id="max-pv-toggle" data-enabled="{str(enabled).lower()}">{escape_html(button_label)}</button>
+    <div class="status" id="max-pv-status">Live current cap.</div>
+  </div>
 </div>
 """
 
@@ -2324,7 +2366,7 @@ def render_controls_panel(state: dict[str, Any], config: dict[str, Any]) -> str:
     simulation = render_simulation_controls(state)
     max_pv = render_max_pv_controls(state, config)
     return (
-        '<div class="stack">'
+        '<div class="controls-stack">'
         f'<div>{automation}</div>'
         f'<div>{simulation}</div>'
         f'<div>{max_pv}</div>'
