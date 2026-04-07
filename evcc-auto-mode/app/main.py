@@ -1666,6 +1666,9 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
     .button-secondary {{
       background: #395761;
     }}
+    .button-success {{
+      background: #1f7a45;
+    }}
     .overview-layout {{
       display: grid;
       gap: 16px;
@@ -1790,12 +1793,9 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
       const automationStatus = document.getElementById("automation-status");
       const simulationStatus = document.getElementById("simulation-status");
       const maxPvStatus = document.getElementById("max-pv-status");
-      const simulationEnableButton = document.getElementById("simulation-enable");
-      const simulationDisableButton = document.getElementById("simulation-disable");
-      const maxPvEnableButton = document.getElementById("max-pv-enable");
-      const maxPvDisableButton = document.getElementById("max-pv-disable");
-      const stopButton = document.getElementById("automation-stop");
-      const startButton = document.getElementById("automation-start");
+      const simulationToggleButton = document.getElementById("simulation-toggle");
+      const maxPvToggleButton = document.getElementById("max-pv-toggle");
+      const automationToggleButton = document.getElementById("automation-toggle");
       const refreshButton = document.getElementById("page-refresh");
       const advancedToggleButton = document.getElementById("advanced-toggle");
       const refreshStatus = document.getElementById("refresh-status");
@@ -2007,23 +2007,23 @@ def render_debug_html(snapshot: dict[str, Any]) -> str:
           maxPvStatus.textContent = `Save failed: ${{error.message}}`;
         }}
       }}
-      if (stopButton) {{
-        stopButton.addEventListener("click", () => toggleAutomation(false, "user pressed STOP automation"));
+      if (automationToggleButton) {{
+        automationToggleButton.addEventListener("click", () => {{
+          const enabled = automationToggleButton.dataset.enabled === "true";
+          toggleAutomation(!enabled, enabled ? "user disabled automation" : "user enabled automation");
+        }});
       }}
-      if (startButton) {{
-        startButton.addEventListener("click", () => toggleAutomation(true, "user pressed START automation"));
+      if (simulationToggleButton) {{
+        simulationToggleButton.addEventListener("click", () => {{
+          const enabled = simulationToggleButton.dataset.enabled === "true";
+          toggleSimulation(!enabled, enabled ? "user disabled what-if simulation" : "user enabled what-if simulation");
+        }});
       }}
-      if (simulationEnableButton) {{
-        simulationEnableButton.addEventListener("click", () => toggleSimulation(true, "user enabled what-if simulation"));
-      }}
-      if (simulationDisableButton) {{
-        simulationDisableButton.addEventListener("click", () => toggleSimulation(false, "user disabled what-if simulation"));
-      }}
-      if (maxPvEnableButton) {{
-        maxPvEnableButton.addEventListener("click", () => toggleMaxPvMode(true, "user enabled max pv mode"));
-      }}
-      if (maxPvDisableButton) {{
-        maxPvDisableButton.addEventListener("click", () => toggleMaxPvMode(false, "user disabled max pv mode"));
+      if (maxPvToggleButton) {{
+        maxPvToggleButton.addEventListener("click", () => {{
+          const enabled = maxPvToggleButton.dataset.enabled === "true";
+          toggleMaxPvMode(!enabled, enabled ? "user disabled max pv mode" : "user enabled max pv mode");
+        }});
       }}
       if (refreshButton) {{
         refreshButton.addEventListener("click", refreshPageNow);
@@ -2268,12 +2268,13 @@ def render_power_sensor_options(selected_entity_id: str, options: list[dict[str,
 def render_automation_controls(state: dict[str, Any]) -> str:
     enabled = bool(state["automation_enabled"])
     automation_text = "running" if enabled else "stopped"
+    button_class = "button-success" if enabled else "button-danger"
+    button_label = "Automation Active" if enabled else "Automation Disabled"
     return f"""
 <div class="label">Automation State</div>
 <div class="value">{escape_html(automation_text)}</div>
 <div class="actions">
-  <button type="button" class="button-danger" id="automation-stop">STOP Automation</button>
-  <button type="button" class="button-secondary" id="automation-start">Start Automation</button>
+  <button type="button" class="{button_class}" id="automation-toggle" data-enabled="{str(enabled).lower()}">{escape_html(button_label)}</button>
   <div class="status" id="automation-status">Stop clears the add-on's automation ownership and prevents further MQTT writes until restarted.</div>
 </div>
 """
@@ -2282,6 +2283,8 @@ def render_automation_controls(state: dict[str, Any]) -> str:
 def render_simulation_controls(state: dict[str, Any]) -> str:
     enabled = bool(state["simulation_enabled"])
     simulation_text = "what-if active" if enabled else "live writes active"
+    button_class = "button-success" if enabled else "button-danger"
+    button_label = "What-If Active" if enabled else "What-If Disabled"
     last_command = "none"
     if state.get("last_mode_command"):
         suffix = " (simulated)" if state.get("last_mode_command_simulated") else ""
@@ -2292,8 +2295,7 @@ def render_simulation_controls(state: dict[str, Any]) -> str:
 <div class="label" style="margin-top: 12px;">Last Command</div>
 <div class="value">{escape_html(last_command)}</div>
 <div class="actions">
-  <button type="button" class="button-secondary" id="simulation-enable">Enable What-If</button>
-  <button type="button" class="button-danger" id="simulation-disable">Disable What-If</button>
+  <button type="button" class="{button_class}" id="simulation-toggle" data-enabled="{str(enabled).lower()}">{escape_html(button_label)}</button>
   <div class="status" id="simulation-status">What-if uses the real incoming values and shows what the add-on would write, but suppresses the actual MQTT mode command.</div>
 </div>
 """
@@ -2303,14 +2305,15 @@ def render_max_pv_controls(state: dict[str, Any], config: dict[str, Any]) -> str
     enabled = bool(config.get("max_pv_mode_enabled"))
     status = "max pv active" if enabled else "max pv off"
     calculated = format_compact_current(state.get("max_pv_target_current_a"))
+    button_class = "button-success" if enabled else "button-danger"
+    button_label = "Max PV Active" if enabled else "Max PV Disabled"
     return f"""
 <div class="label">Status</div>
 <div class="value">{escape_html(status)}</div>
 <div class="label" style="margin-top: 12px;">Current Max Calculated</div>
 <div class="value">{escape_html(calculated)}</div>
 <div class="actions">
-  <button type="button" class="button-secondary" id="max-pv-enable">Enable Max PV</button>
-  <button type="button" class="button-danger" id="max-pv-disable">Disable Max PV</button>
+  <button type="button" class="{button_class}" id="max-pv-toggle" data-enabled="{str(enabled).lower()}">{escape_html(button_label)}</button>
   <div class="status" id="max-pv-status">Main shortcut for Max PV on the overview screen.</div>
 </div>
 """

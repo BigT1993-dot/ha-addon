@@ -31,6 +31,11 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
+Neu in `0.3.6`:
+
+- `Controls` nutzt jetzt je Funktion nur noch einen Zustandsbutton
+- Beschriftung und Farbe spiegeln direkt den aktuellen Zustand: aktiv gruen, deaktiviert rot
+
 Neu in `0.3.5`:
 
 - `Overview` weiter reduziert und auf die wichtigsten Werte verdichtet
