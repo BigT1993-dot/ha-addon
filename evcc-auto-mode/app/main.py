@@ -476,8 +476,10 @@ class EvccAutoMode:
             else:
                 blockers.append("battery power data is stale")
         elif self.battery_discharge_timer_started_at is None:
+            threshold = self.config.battery_discharge_power_threshold_w
+            direction = "at or above" if threshold >= 0 else "at or below"
             blockers.append(
-                f"no sustained battery discharge detected at or above {format_threshold(self.config.battery_discharge_power_threshold_w)} W"
+                f"no sustained battery discharge detected {direction} {format_threshold(threshold)} W"
             )
         else:
             blockers.append("battery discharge delay not reached yet")
@@ -506,7 +508,10 @@ class EvccAutoMode:
     def is_battery_discharge_above_threshold(self) -> bool:
         if self.battery_power is None:
             return False
-        return self.battery_power >= self.config.battery_discharge_power_threshold_w
+        threshold = self.config.battery_discharge_power_threshold_w
+        if threshold >= 0:
+            return self.battery_power >= threshold
+        return self.battery_power <= threshold
 
     def refresh_grid_power_source(self) -> None:
         entity_id = self.config.homeassistant_power_sensor_entity_id
@@ -1471,7 +1476,7 @@ def render_config_form(config: dict[str, Any]) -> str:
     <label>Import Threshold (W)<input name="import_power_threshold_w" type="number" step="1" value="{escape_html(str(config["import_power_threshold_w"]))}" required></label>
     <label>Export Delay (s)<input name="export_delay_seconds" type="number" min="1" value="{escape_html(str(config["export_delay_seconds"]))}" required></label>
     <label>Import Delay (s)<input name="import_delay_seconds" type="number" min="1" value="{escape_html(str(config["import_delay_seconds"]))}" required></label>
-    <label>Battery Discharge Threshold (W)<input name="battery_discharge_power_threshold_w" type="number" step="1" min="1" value="{escape_html(str(config["battery_discharge_power_threshold_w"]))}" required></label>
+    <label>Battery Discharge Threshold (W)<input name="battery_discharge_power_threshold_w" type="number" step="1" value="{escape_html(str(config["battery_discharge_power_threshold_w"]))}" required></label>
     <label>Battery Discharge Delay (s)<input name="battery_discharge_delay_seconds" type="number" min="1" value="{escape_html(str(config["battery_discharge_delay_seconds"]))}" required></label>
     <label>evcc Active Threshold (A)<input name="evcc_active_current_threshold" type="number" step="0.1" min="0" value="{escape_html(str(config["evcc_active_current_threshold"]))}" required></label>
     <label>Reset Auto State On Restart
@@ -1635,8 +1640,8 @@ def validate_config(config: AddonConfig) -> None:
         raise ValueError("export_delay_seconds must be >= 1")
     if config.import_delay_seconds < 1:
         raise ValueError("import_delay_seconds must be >= 1")
-    if config.battery_discharge_power_threshold_w <= 0:
-        raise ValueError("battery_discharge_power_threshold_w must be > 0")
+    if config.battery_discharge_power_threshold_w == 0:
+        raise ValueError("battery_discharge_power_threshold_w must not be 0")
     if config.battery_discharge_delay_seconds < 1:
         raise ValueError("battery_discharge_delay_seconds must be >= 1")
     if config.evcc_active_current_threshold < 0:

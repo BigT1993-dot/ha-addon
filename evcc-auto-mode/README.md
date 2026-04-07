@@ -31,6 +31,12 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
+Neu in `0.2.22`:
+
+- Batterientlade-Schwelle unterstuetzt jetzt positive und negative Vorzeichen
+- `200` bedeutet Entladung ab `>= 200 W`
+- `-200` bedeutet Entladung ab `<= -200 W`
+
 Neu in `0.2.21`:
 
 - Startpfad auf `run.sh` mit `with-contenv` umgestellt
@@ -93,7 +99,9 @@ Wenn `STOP Automation` gedrueckt wird, schreibt das Add-on keine weiteren automa
 
 Hinweis:
 
-- Die Batterierueckschaltung nimmt aktuell an, dass positive Werte Entladung bedeuten.
+- Die Batterierueckschaltung folgt dem Vorzeichen der konfigurierten Schwelle.
+- Positiver Schwellenwert: Entladung ab `>= Schwelle`
+- Negativer Schwellenwert: Entladung ab `<= Schwelle`
 
 ## MQTT-Topics
 

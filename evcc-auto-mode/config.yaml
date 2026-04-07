@@ -1,5 +1,5 @@
 name: evcc Auto Mode
-version: "0.2.21"
+version: "0.2.22"
 slug: evcc_auto_mode
 description: Automatically switch evcc between pv and minpv via MQTT.
 url: "https://github.com/BigT1993-dot/ha-addon/tree/main/evcc-auto-mode"
@@ -49,7 +49,7 @@ schema:
   import_power_threshold_w: float
   export_delay_seconds: int(1,)
   import_delay_seconds: int(1,)
-  battery_discharge_power_threshold_w: float(0.000001,)
+  battery_discharge_power_threshold_w: float
   battery_discharge_delay_seconds: int(1,)
   evcc_active_current_threshold: float(0,)
   auto_reset_on_restart: bool
