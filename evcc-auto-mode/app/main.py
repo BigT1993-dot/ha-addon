@@ -469,6 +469,16 @@ class EvccAutoMode:
                 self.reset_max_pv_min_current(reason="vehicle disconnected")
                 self.set_auto_mode_active(False, reason="vehicle disconnected", source="automation")
 
+            if self.config.max_pv_mode_enabled:
+                if not self.connected:
+                    self.disable_max_pv_mode(reason="vehicle disconnected", source="automation")
+                    self.last_restore_reason = "vehicle disconnected"
+                    return
+                if self.vehicle_soc is not None and self.vehicle_soc >= 100:
+                    self.disable_max_pv_mode(reason="vehicle SoC reached 100%", source="automation")
+                    self.last_restore_reason = "vehicle SoC reached 100%"
+                    return
+
             if not self.automation_enabled:
                 self.last_decision_reason = "automation stopped by user"
                 self.last_restore_reason = "automation stopped by user"
@@ -693,6 +703,39 @@ class EvccAutoMode:
         if self.last_min_current_command == self.config.max_pv_min_current_a:
             return
         self.publish_min_current(self.config.max_pv_min_current_a, reason=reason, source="max_pv_reset")
+
+    def disable_max_pv_mode(self, reason: str, source: str) -> None:
+        if not self.config.max_pv_mode_enabled:
+            return
+
+        restore_mode = self.max_pv_restore_mode
+        forced_mode_active = self.max_pv_forced_mode_active
+        updated_payload = config_to_dict(self.config)
+        updated_payload["max_pv_mode_enabled"] = False
+        next_config = config_from_payload(updated_payload)
+        validate_config(next_config)
+        self.config = next_config
+
+        self.reset_max_pv_min_current(reason=reason)
+        if forced_mode_active and restore_mode:
+            self.publish_mode(restore_mode, reason=reason, source="max_pv_mode_restore")
+
+        self.max_pv_restore_mode = None
+        self.max_pv_forced_mode_active = False
+        self.record_event(
+            "max_pv_mode_toggle",
+            "max_pv_mode_enabled set to false",
+            reason=reason,
+            details={
+                "source": source,
+                "max_pv_mode_enabled": False,
+                "restore_mode": restore_mode,
+                "forced_mode_active": forced_mode_active,
+                "automatic": True,
+            },
+        )
+        write_runtime_config(next_config)
+        self.persist_runtime_state()
 
     def is_grid_power_fresh(self, now: float) -> bool:
         return self.grid_power_updated_at is not None and now - self.grid_power_updated_at <= POWER_SENSOR_POLL_INTERVAL_SECONDS * 3
@@ -1224,46 +1267,39 @@ class EvccAutoMode:
             if self.config.max_pv_mode_enabled == enabled:
                 return self.get_debug_snapshot()
 
-            updated_payload = config_to_dict(self.config)
-            updated_payload["max_pv_mode_enabled"] = enabled
-            next_config = config_from_payload(updated_payload)
-            validate_config(next_config)
-            restore_mode = self.max_pv_restore_mode
-            forced_mode_active = self.max_pv_forced_mode_active
-
             if enabled:
+                updated_payload = config_to_dict(self.config)
+                updated_payload["max_pv_mode_enabled"] = enabled
+                next_config = config_from_payload(updated_payload)
+                validate_config(next_config)
+                restore_mode = self.max_pv_restore_mode
+                forced_mode_active = self.max_pv_forced_mode_active
                 if self.current_mode != "minpv":
                     restore_mode = self.current_mode or "pv"
                     forced_mode_active = True
                 else:
                     restore_mode = None
                     forced_mode_active = False
-            self.config = next_config
-            if enabled:
+                self.config = next_config
                 self.max_pv_restore_mode = restore_mode
                 self.max_pv_forced_mode_active = forced_mode_active
                 if forced_mode_active:
                     self.publish_mode("minpv", reason=reason, source="max_pv_mode")
+                self.record_event(
+                    "max_pv_mode_toggle",
+                    f"max_pv_mode_enabled set to {format_value(enabled)}",
+                    reason=reason,
+                    details={
+                        "source": "ui",
+                        "max_pv_mode_enabled": enabled,
+                        "restore_mode": restore_mode,
+                        "forced_mode_active": forced_mode_active,
+                    },
+                )
+                write_runtime_config(next_config)
+                self.persist_runtime_state()
             else:
-                self.reset_max_pv_min_current(reason=reason)
-                if forced_mode_active and restore_mode:
-                    self.publish_mode(restore_mode, reason=reason, source="max_pv_mode_restore")
-                self.max_pv_restore_mode = None
-                self.max_pv_forced_mode_active = False
-
-            self.record_event(
-                "max_pv_mode_toggle",
-                f"max_pv_mode_enabled set to {format_value(enabled)}",
-                reason=reason,
-                details={
-                    "source": "ui",
-                    "max_pv_mode_enabled": enabled,
-                    "restore_mode": restore_mode,
-                    "forced_mode_active": forced_mode_active,
-                },
-            )
-            write_runtime_config(next_config)
-            self.persist_runtime_state()
+                self.disable_max_pv_mode(reason=reason, source="ui")
 
         self.evaluate()
         return self.get_debug_snapshot()

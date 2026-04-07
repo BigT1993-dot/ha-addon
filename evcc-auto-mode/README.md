@@ -31,6 +31,12 @@ Wenn mehrere Aktivierungsbedingungen gleichzeitig nicht erfuellt sind, zeigt die
 
 Der interne Zustand `auto_mode_active` wird unter `/data/runtime_state.json` gespeichert. Mit `auto_reset_on_restart: false` kann das Add-on diesen Zustand ueber einen Neustart behalten, mit `true` wird er beim Start verworfen.
 
+Neu in `0.3.9`:
+
+- `Max PV` deaktiviert sich jetzt automatisch, wenn das Fahrzeug nicht mehr verbunden ist
+- `Max PV` deaktiviert sich jetzt auch automatisch bei `Vehicle SoC >= 100 %`
+- dabei wird weiterhin auf den zuvor gemerkten Modus zurueckgeschaltet
+
 Neu in `0.3.8`:
 
 - `Max PV` ist jetzt ein eigener Modus: beim Aktivieren wird direkt auf `minpv` geschaltet
