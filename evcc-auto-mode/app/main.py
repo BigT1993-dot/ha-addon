@@ -338,6 +338,8 @@ class EvccAutoMode:
         self.last_min_current_command_at: float | None = None
         self.max_pv_sensor_error: str | None = None
         self.last_max_pv_control_at: float | None = None
+        self.max_pv_restore_mode: str | None = None
+        self.max_pv_forced_mode_active = False
 
         LOGGER.info(
             "Runtime environment flags: %s",
@@ -412,6 +414,9 @@ class EvccAutoMode:
                                 reason="mode topic updated",
                                 details={"previous_mode": previous_mode or None, "current_mode": payload},
                             )
+                        if payload != "minpv" and self.max_pv_forced_mode_active:
+                            self.max_pv_forced_mode_active = False
+                            self.max_pv_restore_mode = None
                         if payload != "minpv" and self.auto_mode_active:
                             LOGGER.info("Mode changed externally to %s; clearing auto flag", payload)
                             self.reset_max_pv_min_current(reason=f"evcc mode changed externally to {payload}")
@@ -581,7 +586,7 @@ class EvccAutoMode:
             return
         self.last_max_pv_control_at = now
 
-        if not self.auto_mode_active or self.current_mode != "minpv":
+        if self.current_mode != "minpv":
             return
         if not self.connected or self.plan_active:
             return
@@ -957,6 +962,8 @@ class EvccAutoMode:
         self.inverter_input_power = parse_optional_persisted_float(state.get("inverter_input_power"))
         self.last_mode_command = str(state.get("last_mode_command") or "") or None
         self.last_min_current_command = parse_optional_persisted_int(state.get("last_min_current_command"))
+        self.max_pv_restore_mode = str(state.get("max_pv_restore_mode") or "") or None
+        self.max_pv_forced_mode_active = parse_config_bool(state.get("max_pv_forced_mode_active", False))
         self.last_decision_reason = str(state.get("last_decision_reason") or self.last_decision_reason)
         self.last_restore_reason = str(state.get("last_restore_reason") or self.last_restore_reason)
         if self.config.auto_reset_on_restart:
@@ -987,6 +994,8 @@ class EvccAutoMode:
                 "inverter_input_power": self.inverter_input_power,
                 "last_mode_command": self.last_mode_command,
                 "last_min_current_command": self.last_min_current_command,
+                "max_pv_restore_mode": self.max_pv_restore_mode,
+                "max_pv_forced_mode_active": self.max_pv_forced_mode_active,
                 "last_decision_reason": self.last_decision_reason,
                 "last_restore_reason": self.last_restore_reason,
                 "topic_values": self.topic_values,
@@ -1087,6 +1096,8 @@ class EvccAutoMode:
                     "automation_enabled": self.automation_enabled,
                     "auto_mode_active": self.auto_mode_active,
                     "last_min_current_command": self.last_min_current_command,
+                    "max_pv_restore_mode": self.max_pv_restore_mode,
+                    "max_pv_forced_mode_active": self.max_pv_forced_mode_active,
                     "last_decision_reason": self.last_decision_reason,
                     "last_restore_reason": self.last_restore_reason,
                     "last_mode_command": self.last_mode_command,
@@ -1152,6 +1163,8 @@ class EvccAutoMode:
             self.last_min_current_command_at = None
             self.max_pv_sensor_error = None
             self.last_max_pv_control_at = None
+            self.max_pv_restore_mode = None
+            self.max_pv_forced_mode_active = False
             self.homeassistant_power_sensor_cache_at = None
             self.homeassistant_power_sensor_error = None
             self.homeassistant_battery_power_sensor_error = None
@@ -1215,15 +1228,39 @@ class EvccAutoMode:
             updated_payload["max_pv_mode_enabled"] = enabled
             next_config = config_from_payload(updated_payload)
             validate_config(next_config)
+            restore_mode = self.max_pv_restore_mode
+            forced_mode_active = self.max_pv_forced_mode_active
+
+            if enabled:
+                if self.current_mode != "minpv":
+                    restore_mode = self.current_mode or "pv"
+                    forced_mode_active = True
+                else:
+                    restore_mode = None
+                    forced_mode_active = False
             self.config = next_config
-            if not enabled:
+            if enabled:
+                self.max_pv_restore_mode = restore_mode
+                self.max_pv_forced_mode_active = forced_mode_active
+                if forced_mode_active:
+                    self.publish_mode("minpv", reason=reason, source="max_pv_mode")
+            else:
                 self.reset_max_pv_min_current(reason=reason)
+                if forced_mode_active and restore_mode:
+                    self.publish_mode(restore_mode, reason=reason, source="max_pv_mode_restore")
+                self.max_pv_restore_mode = None
+                self.max_pv_forced_mode_active = False
 
             self.record_event(
                 "max_pv_mode_toggle",
                 f"max_pv_mode_enabled set to {format_value(enabled)}",
                 reason=reason,
-                details={"source": "ui", "max_pv_mode_enabled": enabled},
+                details={
+                    "source": "ui",
+                    "max_pv_mode_enabled": enabled,
+                    "restore_mode": restore_mode,
+                    "forced_mode_active": forced_mode_active,
+                },
             )
             write_runtime_config(next_config)
             self.persist_runtime_state()
