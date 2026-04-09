@@ -335,6 +335,8 @@ class EvccAutoMode:
         self.supervisor_token = os.getenv("SUPERVISOR_TOKEN", "")
         self.homeassistant_power_sensor_cache: list[dict[str, str]] = []
         self.homeassistant_power_sensor_cache_at: float | None = None
+        self.homeassistant_percent_sensor_cache: list[dict[str, str]] = []
+        self.homeassistant_percent_sensor_cache_at: float | None = None
         self.homeassistant_power_sensor_error: str | None = None
         self.homeassistant_battery_power_sensor_error: str | None = None
         self.homeassistant_battery_soc_sensor_error: str | None = None
@@ -949,6 +951,39 @@ class EvccAutoMode:
         self.homeassistant_power_sensor_error = None
         return sensors
 
+    def list_homeassistant_percent_sensors(self) -> list[dict[str, str]]:
+        now = time.monotonic()
+        if (
+            self.homeassistant_percent_sensor_cache_at is not None
+            and now - self.homeassistant_percent_sensor_cache_at < POWER_SENSOR_CACHE_TTL_SECONDS
+        ):
+            return self.homeassistant_percent_sensor_cache
+
+        try:
+            states = self.homeassistant_api_get("/states")
+        except Exception:
+            LOGGER.exception("Failed to list Home Assistant percent sensors")
+            return self.homeassistant_percent_sensor_cache
+
+        sensors: list[dict[str, str]] = []
+        for state in states:
+            entity_id = str(state.get("entity_id", ""))
+            if not entity_id.startswith("sensor."):
+                continue
+            attributes = state.get("attributes", {})
+            if str(attributes.get("unit_of_measurement", "")).strip() != "%":
+                continue
+            sensors.append(
+                {
+                    "entity_id": entity_id,
+                    "name": str(attributes.get("friendly_name") or entity_id),
+                }
+            )
+        sensors.sort(key=lambda item: item["name"].lower())
+        self.homeassistant_percent_sensor_cache = sensors
+        self.homeassistant_percent_sensor_cache_at = now
+        return sensors
+
     def homeassistant_api_get(self, path: str) -> Any:
         if not self.supervisor_token:
             env_flags = collect_runtime_env_flags()
@@ -1152,6 +1187,7 @@ class EvccAutoMode:
                     **config_to_dict(self.config),
                     "mqtt_password": mask_secret(self.config.mqtt_password),
                     "power_sensor_options": self.list_homeassistant_power_sensors(),
+                    "percent_sensor_options": self.list_homeassistant_percent_sensors(),
                     "power_sensor_error": self.homeassistant_power_sensor_error,
                     "battery_power_sensor_error": self.homeassistant_battery_power_sensor_error,
                     "battery_soc_sensor_error": self.homeassistant_battery_soc_sensor_error,
@@ -1200,6 +1236,7 @@ class EvccAutoMode:
                 "topic_values": self.topic_values,
                 "history": self.history,
                 "power_sensor_options": self.list_homeassistant_power_sensors(),
+                "percent_sensor_options": self.list_homeassistant_percent_sensors(),
             }
 
     def update_config(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2310,6 +2347,10 @@ def render_config_form(config: dict[str, Any]) -> str:
         selected_sensor,
         config.get("power_sensor_options", []),
     )
+    percent_sensor_options = render_power_sensor_options(
+        "",
+        config.get("percent_sensor_options", []),
+    )
     power_sensor_error = str(config.get("power_sensor_error") or "")
     battery_power_sensor_error = str(config.get("battery_power_sensor_error") or "")
     battery_soc_sensor_error = str(config.get("battery_soc_sensor_error") or "")
@@ -2336,7 +2377,7 @@ def render_config_form(config: dict[str, Any]) -> str:
         )
     if not status_messages:
         status_messages.append(
-            '<div class="status">Only Home Assistant sensors with unit `W` are suggested here. Manual entry is allowed.</div>'
+            '<div class="status">Power fields suggest `W` sensors. SoC fields suggest `%` sensors. Manual entry is allowed.</div>'
         )
     sensor_status = "".join(status_messages)
     return f"""
@@ -2365,10 +2406,10 @@ def render_config_form(config: dict[str, Any]) -> str:
         <input name="homeassistant_battery_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_battery_sensor)}" placeholder="sensor.battery_power">
       </label>
       <label>Home Assistant Battery SoC Sensor
-        <input name="homeassistant_battery_soc_sensor_entity_id" value="{escape_html(selected_battery_soc_sensor)}" placeholder="sensor.battery_soc">
+        <input name="homeassistant_battery_soc_sensor_entity_id" list="percent-sensor-options" value="{escape_html(selected_battery_soc_sensor)}" placeholder="sensor.battery_soc">
       </label>
       <label>Home Assistant Vehicle SoC Sensor
-        <input name="homeassistant_vehicle_soc_sensor_entity_id" value="{escape_html(selected_vehicle_soc_sensor)}" placeholder="sensor.auto_soc">
+        <input name="homeassistant_vehicle_soc_sensor_entity_id" list="percent-sensor-options" value="{escape_html(selected_vehicle_soc_sensor)}" placeholder="sensor.auto_soc">
       </label>
       <label>Max PV Inverter Input Power Sensor
         <input name="max_pv_inverter_input_power_sensor_entity_id" list="power-sensor-options" value="{escape_html(selected_max_pv_sensor)}" placeholder="sensor.inverter_eingangsleistung">
@@ -2409,6 +2450,9 @@ def render_config_form(config: dict[str, Any]) -> str:
   </datalist>
   <datalist id="power-sensor-options">
     {sensor_options}
+  </datalist>
+  <datalist id="percent-sensor-options">
+    {percent_sensor_options}
   </datalist>
   <div class="actions">
     <button type="submit">Save Config</button>
