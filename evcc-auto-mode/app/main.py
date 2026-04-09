@@ -338,6 +338,7 @@ class EvccAutoMode:
         self.homeassistant_percent_sensor_cache: list[dict[str, str]] = []
         self.homeassistant_percent_sensor_cache_at: float | None = None
         self.homeassistant_power_sensor_error: str | None = None
+        self.homeassistant_percent_sensor_error: str | None = None
         self.homeassistant_battery_power_sensor_error: str | None = None
         self.homeassistant_battery_soc_sensor_error: str | None = None
         self.homeassistant_vehicle_soc_sensor_error: str | None = None
@@ -961,8 +962,9 @@ class EvccAutoMode:
 
         try:
             states = self.homeassistant_api_get("/states")
-        except Exception:
+        except Exception as err:
             LOGGER.exception("Failed to list Home Assistant percent sensors")
+            self.homeassistant_percent_sensor_error = str(err)
             return self.homeassistant_percent_sensor_cache
 
         sensors: list[dict[str, str]] = []
@@ -982,6 +984,7 @@ class EvccAutoMode:
         sensors.sort(key=lambda item: item["name"].lower())
         self.homeassistant_percent_sensor_cache = sensors
         self.homeassistant_percent_sensor_cache_at = now
+        self.homeassistant_percent_sensor_error = None
         return sensors
 
     def homeassistant_api_get(self, path: str) -> Any:
@@ -1189,6 +1192,7 @@ class EvccAutoMode:
                     "power_sensor_options": self.list_homeassistant_power_sensors(),
                     "percent_sensor_options": self.list_homeassistant_percent_sensors(),
                     "power_sensor_error": self.homeassistant_power_sensor_error,
+                    "percent_sensor_error": self.homeassistant_percent_sensor_error,
                     "battery_power_sensor_error": self.homeassistant_battery_power_sensor_error,
                     "battery_soc_sensor_error": self.homeassistant_battery_soc_sensor_error,
                     "vehicle_soc_sensor_error": self.homeassistant_vehicle_soc_sensor_error,
@@ -1290,6 +1294,7 @@ class EvccAutoMode:
             self.max_pv_forced_mode_active = False
             self.homeassistant_power_sensor_cache_at = None
             self.homeassistant_power_sensor_error = None
+            self.homeassistant_percent_sensor_error = None
             self.homeassistant_battery_power_sensor_error = None
             self.homeassistant_battery_soc_sensor_error = None
             self.homeassistant_vehicle_soc_sensor_error = None
@@ -2352,6 +2357,7 @@ def render_config_form(config: dict[str, Any]) -> str:
         config.get("percent_sensor_options", []),
     )
     power_sensor_error = str(config.get("power_sensor_error") or "")
+    percent_sensor_error = str(config.get("percent_sensor_error") or "")
     battery_power_sensor_error = str(config.get("battery_power_sensor_error") or "")
     battery_soc_sensor_error = str(config.get("battery_soc_sensor_error") or "")
     vehicle_soc_sensor_error = str(config.get("vehicle_soc_sensor_error") or "")
@@ -2359,6 +2365,10 @@ def render_config_form(config: dict[str, Any]) -> str:
     status_messages = []
     if power_sensor_error:
         status_messages.append(f'<div class="status warn">Grid sensor list unavailable: {escape_html(power_sensor_error)}</div>')
+    if percent_sensor_error:
+        status_messages.append(
+            f'<div class="status warn">Percent sensor list unavailable: {escape_html(percent_sensor_error)}</div>'
+        )
     if battery_power_sensor_error:
         status_messages.append(
             f'<div class="status warn">Battery power sensor fallback active: {escape_html(battery_power_sensor_error)}</div>'
@@ -2378,6 +2388,10 @@ def render_config_form(config: dict[str, Any]) -> str:
     if not status_messages:
         status_messages.append(
             '<div class="status">Power fields suggest `W` sensors. SoC fields suggest `%` sensors. Manual entry is allowed.</div>'
+        )
+    if not percent_sensor_error and not config.get("percent_sensor_options", []):
+        status_messages.append(
+            '<div class="status warn">No Home Assistant sensors with unit `%` were found for the SoC fields.</div>'
         )
     sensor_status = "".join(status_messages)
     return f"""
