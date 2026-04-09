@@ -6,11 +6,12 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib import error, request
+from zoneinfo import ZoneInfo
 
 import paho.mqtt.client as mqtt
 
@@ -28,6 +29,7 @@ MAX_HISTORY_ENTRIES = 100
 HOME_ASSISTANT_API_URL = "http://supervisor/core/api"
 POWER_SENSOR_CACHE_TTL_SECONDS = 30
 POWER_SENSOR_POLL_INTERVAL_SECONDS = 5
+BERLIN_TZ = ZoneInfo("Europe/Berlin")
 
 
 class ConfigError(RuntimeError):
@@ -407,7 +409,7 @@ class EvccAutoMode:
             self.last_mqtt_message_at = time.monotonic()
             self.topic_values[msg.topic] = {
                 "payload": payload,
-                "received_at": iso_utc_now(),
+                "received_at": iso_berlin_now(),
             }
             try:
                 if msg.topic == topics["connected"]:
@@ -1083,7 +1085,7 @@ class EvccAutoMode:
                 "last_restore_reason": self.last_restore_reason,
                 "topic_values": self.topic_values,
                 "history": self.history,
-                "updated_at": iso_utc_now(),
+                "updated_at": iso_berlin_now(),
             }
         )
 
@@ -1131,7 +1133,7 @@ class EvccAutoMode:
         details: dict[str, Any] | None = None,
     ) -> None:
         event = {
-            "timestamp": iso_utc_now(),
+            "timestamp": iso_berlin_now(),
             "type": event_type,
             "message": message,
             "reason": reason,
@@ -1145,7 +1147,7 @@ class EvccAutoMode:
             now = time.monotonic()
             max_pv_metrics = self.calculate_max_pv_metrics()
             return {
-                "generated_at": iso_utc_now(),
+                "generated_at": iso_berlin_now(),
                 "config": {
                     **config_to_dict(self.config),
                     "mqtt_password": mask_secret(self.config.mqtt_password),
@@ -1499,8 +1501,8 @@ def elapsed_seconds(started_at: float | None, now: float) -> float | None:
     return round(now - started_at, 1)
 
 
-def iso_utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def iso_berlin_now() -> str:
+    return datetime.now(BERLIN_TZ).isoformat()
 
 
 def format_history_timestamp(value: str) -> str:
@@ -1508,6 +1510,8 @@ def format_history_timestamp(value: str) -> str:
         parsed = datetime.fromisoformat(value)
     except ValueError:
         return value
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(BERLIN_TZ)
     return parsed.strftime("%d/%m %H:%M:%S")
 
 
