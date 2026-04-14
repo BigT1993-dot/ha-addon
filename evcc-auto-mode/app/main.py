@@ -515,6 +515,13 @@ class EvccAutoMode:
                 self.set_auto_mode_active(False, reason=f"restored pv: {restore_reason}", source="automation")
                 return
 
+            import_release_ready = self.should_release_auto_mode_on_import(now)
+            if import_release_ready:
+                release_reason = "sustained grid import threshold reached; releasing auto mode ownership"
+                self.last_restore_reason = release_reason
+                self.set_auto_mode_active(False, reason=release_reason, source="automation")
+                return
+
             if self.auto_mode_active and self.offered_current > self.config.evcc_active_current_threshold:
                 release_reason = (
                     "evcc is actively regulating current above "
@@ -572,32 +579,16 @@ class EvccAutoMode:
     def should_restore_pv(self, now: float) -> tuple[bool, str]:
         if not self.auto_mode_active:
             return False, "auto mode not active"
+        if self.current_mode != "minpv":
+            return False, "waiting for evcc to confirm minpv"
         if self.current_mode == "pv":
             return False, "evcc already in pv"
-
-        import_ready = self.is_grid_power_fresh(now) and self.import_timer_started_at is not None
-        if import_ready and now - self.import_timer_started_at >= self.config.import_delay_seconds:
-            return True, "sustained grid import threshold reached"
 
         battery_ready = self.is_battery_power_fresh(now) and self.battery_discharge_timer_started_at is not None
         if battery_ready and now - self.battery_discharge_timer_started_at >= self.config.battery_discharge_delay_seconds:
             return True, "sustained battery discharge threshold reached"
 
         blockers: list[str] = []
-        if not self.is_grid_power_fresh(now):
-            if self.grid_power_updated_at is None:
-                blockers.append("grid power source has not delivered data yet")
-            else:
-                blockers.append("grid power data is stale")
-        elif self.import_timer_started_at is None:
-            threshold = self.config.import_power_threshold_w
-            direction = "at or above" if threshold >= 0 else "at or below"
-            blockers.append(
-                f"no sustained grid import detected {direction} {format_threshold(threshold)} W"
-            )
-        else:
-            blockers.append("import delay not reached yet")
-
         if not self.is_battery_power_fresh(now):
             if self.battery_power_updated_at is None:
                 blockers.append("battery power source has not delivered data yet")
@@ -613,6 +604,17 @@ class EvccAutoMode:
             blockers.append("battery discharge delay not reached yet")
 
         return False, "; ".join(blockers)
+
+    def should_release_auto_mode_on_import(self, now: float) -> bool:
+        if not self.auto_mode_active:
+            return False
+        if self.current_mode != "minpv":
+            return False
+        if not self.is_grid_power_fresh(now):
+            return False
+        if self.import_timer_started_at is None:
+            return False
+        return now - self.import_timer_started_at >= self.config.import_delay_seconds
 
     def maybe_control_max_pv(self, now: float) -> None:
         if not self.config.max_pv_mode_enabled:
@@ -1142,6 +1144,9 @@ class EvccAutoMode:
             return
 
         self.auto_mode_active = active
+        if active:
+            self.import_timer_started_at = None
+            self.battery_discharge_timer_started_at = None
         self.record_event(
             "auto_mode_state",
             f"auto_mode_active set to {format_value(active)}",

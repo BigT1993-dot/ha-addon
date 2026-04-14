@@ -177,9 +177,9 @@ Wenn `STOP Automation` gedrueckt wird, schreibt das Add-on keine weiteren automa
   - `batterySoc < bufferSoc`
   - kein aktiver Ladeplan vorliegt
   - `evcc` nicht bereits selbst ueber den konfigurierten Mindeststrom hinaus regelt
-- Schaltet nur dann wieder auf `pv`, wenn das Add-on `minpv` selbst gesetzt hat und anschliessend mindestens eine dieser Bedingungen greift:
-  - `grid_power` liegt fuer die konfigurierte Import-Dauer bei oder ueber der Import-Schwelle
-  - `battery_power` liegt fuer die konfigurierte Entlade-Dauer bei oder ueber der Batterientlade-Schwelle
+- Schaltet nur dann wieder auf `pv`, wenn das Add-on `minpv` selbst gesetzt hat und anschliessend `battery_power` fuer die konfigurierte Entlade-Dauer bei oder ueber der Batterientlade-Schwelle liegt
+- Nach dem automatischen Wechsel auf `minpv` setzt das Add-on die Rueckschalt-Timer neu auf und wartet auf die bestaetigte `minpv`-Rueckmeldung von `evcc`, bevor eine Rueckschaltung auf `pv` wieder bewertet wird.
+- `grid_power` bei oder ueber der konfigurierten Import-Schwelle schaltet nicht mehr auf `pv` zurueck. In diesem Fall loescht das Add-on nur `auto_mode_active` und uebergibt an `evcc`.
 - Wenn `evcc` in `minpv` selbst ueber den konfigurierten `offeredCurrent`-Schwellwert hinaus regelt, bleibt der Modus unveraendert, aber `auto_mode_active` wird geloescht. Ab diesem Punkt uebernimmt `evcc`.
 
 Hinweis:

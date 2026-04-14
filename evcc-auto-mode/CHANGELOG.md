@@ -6,6 +6,13 @@ The format is based on Keep a Changelog, as recommended by the Home Assistant de
 
 ## [Unreleased]
 
+## [0.3.16] - 2026-04-14
+
+### Changed
+
+- Reset restore timers after the add-on switches to `minpv` and wait for `evcc` to confirm `minpv` before evaluating a restore to `pv`.
+- Stop switching back to `pv` on grid import; sustained import now only clears `auto_mode_active` and hands control back to `evcc`.
+
 ## [0.3.15] - 2026-04-14
 
 ### Changed
