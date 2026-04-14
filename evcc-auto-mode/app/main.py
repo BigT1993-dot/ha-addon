@@ -155,7 +155,7 @@ def read_config() -> AddonConfig:
         import_power_threshold_w=float(raw.get("import_power_threshold_w", 100.0)),
         export_delay_seconds=int(raw.get("export_delay_seconds", 60)),
         import_delay_seconds=int(raw.get("import_delay_seconds", 30)),
-        battery_discharge_power_threshold_w=float(raw.get("battery_discharge_power_threshold_w", 200.0)),
+        battery_discharge_power_threshold_w=float(raw.get("battery_discharge_power_threshold_w", 100.0)),
         battery_discharge_delay_seconds=int(raw.get("battery_discharge_delay_seconds", 60)),
         evcc_active_current_threshold=float(raw.get("evcc_active_current_threshold", 6.0)),
         max_pv_mode_enabled=parse_config_bool(raw.get("max_pv_mode_enabled", False)),
@@ -269,7 +269,7 @@ def config_from_payload(payload: dict[str, Any]) -> AddonConfig:
         import_power_threshold_w=float(payload.get("import_power_threshold_w", 100.0)),
         export_delay_seconds=int(payload.get("export_delay_seconds", 60)),
         import_delay_seconds=int(payload.get("import_delay_seconds", 30)),
-        battery_discharge_power_threshold_w=float(payload.get("battery_discharge_power_threshold_w", 200.0)),
+        battery_discharge_power_threshold_w=float(payload.get("battery_discharge_power_threshold_w", 100.0)),
         battery_discharge_delay_seconds=int(payload.get("battery_discharge_delay_seconds", 60)),
         evcc_active_current_threshold=float(payload.get("evcc_active_current_threshold", 6.0)),
         max_pv_mode_enabled=parse_config_bool(payload.get("max_pv_mode_enabled", False)),
@@ -513,6 +513,16 @@ class EvccAutoMode:
                 self.publish_mode("pv", reason=restore_reason)
                 self.reset_max_pv_min_current(reason=f"restored pv: {restore_reason}")
                 self.set_auto_mode_active(False, reason=f"restored pv: {restore_reason}", source="automation")
+                return
+
+            if self.auto_mode_active and self.offered_current > self.config.evcc_active_current_threshold:
+                release_reason = (
+                    "evcc is actively regulating current above "
+                    f"{format_threshold(self.config.evcc_active_current_threshold)} A"
+                )
+                self.last_restore_reason = release_reason
+                LOGGER.info("EVCC took over current regulation; clearing auto flag")
+                self.set_auto_mode_active(False, reason=release_reason, source="automation")
                 return
 
             self.maybe_control_max_pv(now)

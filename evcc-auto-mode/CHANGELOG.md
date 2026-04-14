@@ -6,6 +6,13 @@ The format is based on Keep a Changelog, as recommended by the Home Assistant de
 
 ## [Unreleased]
 
+## [0.3.15] - 2026-04-14
+
+### Changed
+
+- Lower the default battery discharge restore threshold to `100 W` for `60 s`.
+- Clear `auto_mode_active` once `evcc` takes over current regulation above the configured `offeredCurrent` threshold.
+
 ## [0.3.13] - 2026-04-09
 
 ### Added

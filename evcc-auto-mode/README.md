@@ -180,6 +180,7 @@ Wenn `STOP Automation` gedrueckt wird, schreibt das Add-on keine weiteren automa
 - Schaltet nur dann wieder auf `pv`, wenn das Add-on `minpv` selbst gesetzt hat und anschliessend mindestens eine dieser Bedingungen greift:
   - `grid_power` liegt fuer die konfigurierte Import-Dauer bei oder ueber der Import-Schwelle
   - `battery_power` liegt fuer die konfigurierte Entlade-Dauer bei oder ueber der Batterientlade-Schwelle
+- Wenn `evcc` in `minpv` selbst ueber den konfigurierten `offeredCurrent`-Schwellwert hinaus regelt, bleibt der Modus unveraendert, aber `auto_mode_active` wird geloescht. Ab diesem Punkt uebernimmt `evcc`.
 
 Hinweis:
 
@@ -218,7 +219,7 @@ export_power_threshold_w: -100
 import_power_threshold_w: 100
 export_delay_seconds: 60
 import_delay_seconds: 30
-battery_discharge_power_threshold_w: 200
+battery_discharge_power_threshold_w: 100
 battery_discharge_delay_seconds: 60
 evcc_active_current_threshold: 6.0
 auto_reset_on_restart: true
